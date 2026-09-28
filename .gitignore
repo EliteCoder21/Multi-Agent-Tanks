@@ -216,3 +216,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Multi-Agent Tanks: training outputs and local files
+runs/
+checkpoints/
+*.pt
+*.pt.tmp
+train.log
+report/data/
+report/baseline_mean_radio/checkpoints/
+report/baseline_mean_radio/tensorboard/

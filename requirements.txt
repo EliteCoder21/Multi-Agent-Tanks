@@ -1,0 +1,6 @@
+# developed with Python 3.13; install PyTorch with CUDA from https://pytorch.org for your GPU
+torch>=2.5
+numpy
+scipy
+pygame-ce
+tensorboard
