@@ -139,6 +139,17 @@ fresh policy can't yet tell "dead ahead" from "nearby", so it learns to hold fir
 What works is charging only shots with no enemy anywhere in radar range — shooting
 at nothing — and leaving every shot near a fight to the small miss penalty.
 
+**Three action heads that never learned.** Four hundred iterations into the map
+runs, the scouts' unload/heal choice was still a coin flip, the bases' order head
+uniform over its six options, and the place-block head 50/50 — the last held there
+by the extra entropy bonus meant to stop it collapsing, which now that placing is
+free near fights just made blocks confetti (130 a game, 9 % of them extending a
+wall). The special and order heads had nothing to learn from: scouts picked up one
+heart a game, so no base ever had a heart to spend. The fix is a bootstrap for the
+chain — a dense, potential-based pull toward the nearest heart for a scout with room
+(it nets to zero over the trip), bigger pickup and delivery rewards, and the block
+head's entropy bonus back to normal.
+
 **Economy rewards need a floor, not just a ceiling.** After the farming episode the
 economy rewards were cut so far that scouts stopped bothering: a few deliveries a
 game, no repairs, no builds. The fix was not to raise them back but to make idling

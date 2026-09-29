@@ -47,10 +47,10 @@ THROTTLE = torch.tensor([-.5, 0., 1.])
 STEER = torch.tensor([-1., 0., 1.])
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
-# entropy bonus per head (move, fire, special, base order, place block); placing a block
-# has an immediate cost and a delayed, chancy payoff, so with the usual .01 that head
-# collapsed to "never" and cover was never found
-ENTROPY = torch.tensor([.01, .01, .01, .01, .05])
+# entropy bonus per head (move, fire, special, base order, place block). The block head
+# once got extra (.05) to stop it collapsing to "never" under a placement cost; with
+# placing free near fights that extra just held it at random, so it is back to normal
+ENTROPY = torch.tensor([.01, .01, .01, .01, .01])
 # the arenas trained on, round-robin: board side, tanks and bases per side, parallel games
 ARENAS = {'small': dict(grid=400, tanks=14, bases=3, games=1536),
           'medium': dict(grid=560, tanks=28, bases=5, games=1024),

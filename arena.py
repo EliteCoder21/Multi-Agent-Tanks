@@ -71,7 +71,7 @@ KILL_W, BASE_KILL_W, DAMAGE_W = 1., 3., .2
 # a shot with an enemy about never does beyond the miss, even if it's badly aimed
 # (charging every shot, or every shot without an enemy dead ahead, taught fresh
 # policies to stop shooting before they could aim)
-BLIND_SHOT_W, MISS_W = -.1, -.03
+BLIND_SHOT_W, MISS_W = -.1, -.05
 # bases: extra per damage to an enemy base, and more again for every allied tank (beyond
 # the first, up to four) also at that base -- mass on one target instead of trickling in
 BASE_DAMAGE_W, SIEGE_W = .1, .1
@@ -99,13 +99,15 @@ COMRADE_NEAR, COMRADE_DEATH_W, COMMANDER_DEATH_W = 25., -.05, -.15
 # count: a scout that carried its hearts around forever wasn't working)
 IDLE_TURNS, IDLE_W = 60, -.01
 # economy: a scout is paid for fetching hearts and for bringing them home, with a pull
-# toward the nearest base while carrying (potential-based: it nets to zero over a round
-# trip, so it guides without changing what's worth doing), and for healing a teammate
-# within reach -- more for one that's nearly dead. A base is paid for the hp a repair
+# toward the nearest heart while it has room and toward the nearest base while carrying
+# (potential-based: each nets to zero over the trip, so it guides without changing what's
+# worth doing -- without it scouts picked up one heart a game and never found the chain
+# from heart to base), and for healing a teammate within reach -- more for one nearly dead. A base is paid for the hp a repair
 # restores, per heart spent on a tank, and per wall block raised. Kept short of the
 # combat rewards: shared through team spirit, big economy rewards once taught whole
 # armies to farm safely at home instead of fighting
-PICKUP_W, DEPOSIT_W, CARRY_PULL = .2, .6, .3
+PICKUP_W, DEPOSIT_W = .4, 1.
+HEART_PULL, HEART_REACH, CARRY_PULL, HOME_REACH = .3, 50., .5, 100.
 HEAL_W, RESCUE_W, RESCUE_FRAC = .5, .5, .35
 REPAIR_W, BUILD_W, WALL_W = .05, .1, .1
 # blocks: a block dropped with no enemy in radar range and no base of yours nearby is
@@ -447,7 +449,7 @@ class Arena:
         self.gun_cd = torch.where(shoot, float(GUN_CD), torch.where(big, float(BASE_GUN_CD), self.gun_cd))
         launch = self._spawn(alive0 & (role == COMMANDER) & (special > .5) & (self.special_cd == 0), u, MISSILE_SPEED, MISSILE_LIFE, 2., True)
         self.special_cd = torch.where(launch, float(MISSILE_CD), self.special_cd)
-        picked = self._pickup(alive0)
+        picked, d_heart = self._pickup(alive0)
         deposited, healed, rescued = self._scout_special(alive0, special)
         built, spent, repaired, base_walls = self._base_orders(alive0, order, u, counts)
         dealt, base_dmg, friendly_dmg, kills, base_kills, friendly_kills, misses, saves, defend, siege = self._bullets(alive0, intruding, attackers)
@@ -474,7 +476,9 @@ class Arena:
         home = torch.where(self.same & (is_b & (self.hp > 0))[:, None], dd, torch.full_like(dd, FAR)).amin(-1)
         enemy_near = ((dd < RADAR_RANGE) & ~self.same & tank[:, None]).any(-1)
         pointless = ~enemy_near & (home > DEFEND_RADIUS)
-        phi = CARRY_PULL * self.supply * (1 - home / self.grid) * (tank & (role == SCOUT))
+        scout = tank & (role == SCOUT)
+        phi = (HEART_PULL * torch.exp(-d_heart / HEART_REACH) * (scout & (self.supply < self.carry))
+               + CARRY_PULL * self.supply / self.carry * torch.exp(-home / HOME_REACH) * scout)
         pull, self.phi = phi - self.phi, phi
 
         reward = (KILL_W * kills + BASE_KILL_W * base_kills + DAMAGE_W * dealt + BASE_DAMAGE_W * base_dmg + SIEGE_W * siege
@@ -620,9 +624,10 @@ class Arena:
         won = can & (mind <= best.gather(1, h))
         taken = torch.zeros(self.B, self.H, device=self.device).scatter_add(1, h, won.float()) > 0
         self.supply += won.float()
+        nearest = torch.where(self.heart_alive[:, None] & ~taken[:, None], torch.cdist(self.pos, self.heart_pos), torch.full_like(dh, FAR)).amin(-1)
         self.heart_alive &= ~taken
         self.heart_timer = torch.where(taken, float(HEART_RESPAWN), self.heart_timer)
-        return won.float()
+        return won.float(), nearest
 
     def _scout_special(self, alive0, special):
         """A scout's special: at a friendly base, unload every carried heart into it;

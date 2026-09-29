@@ -169,7 +169,7 @@ This is where most of the work went. Each term is there because, without it,
 self-play found something degenerate instead — [docs/HISTORY.md](docs/HISTORY.md)
 tells those stories. All the weights are named constants near the top of `arena.py`.
 
-**Individual credit.** +1 per kill, +0.2 per damage dealt, −0.03 per shot that hits
+**Individual credit.** +1 per kill, +0.2 per damage dealt, −0.05 per shot that hits
 nothing, −1 for dying. A **blind shot** — fired with no enemy anywhere within the
 shooter's radar range — costs −0.1, so spraying at nothing is a loss; a shot with an
 enemy about is never charged beyond the miss, however badly aimed, because charging
@@ -209,11 +209,12 @@ extends a wall of your team's blocks earns +0.15. The tank that placed a block e
 +0.5 for every enemy bullet it stops and +0.2 for every enemy tank it stops at one of
 its bases.
 
-**Economy and medics.** A scout gets +0.2 per heart picked up and +0.6 per heart
-delivered, with a pull toward the nearest base while carrying (potential-based: it
-nets to zero over a round trip, so it guides without changing what is worth doing);
-+0.5 per hp it heals on a teammate within reach and +0.5 more for reaching one below
-35 % health. A base gets +0.05 per hp a repair restores, +0.1 per heart spent on a
+**Economy and medics.** A scout gets +0.4 per heart picked up and +1 per heart
+delivered, with a pull toward the nearest heart while it has room and toward the
+nearest base while carrying (potential-based: each nets to zero over the trip, so it
+guides without changing what is worth doing — without it scouts picked up one heart
+a game and never learned the chain from heart to base); +0.5 per hp it heals on a
+teammate within reach and +0.5 more for reaching one below 35 % health. A base gets +0.05 per hp a repair restores, +0.1 per heart spent on a
 tank and per wall block raised. Still short of the combat rewards: shared through
 team spirit, big economy rewards once taught entire armies to stay home and farm.
 
