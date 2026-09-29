@@ -60,6 +60,7 @@ class Viewer:
         self.playing, self.speed, self.accum = True, 16, 0.
         self.note, self.note_at = None, 0
         self.show_map = 0                                          # 0 off, 1 blue's map, 2 red's map
+        self.show_markers = True                                   # K toggles the base / nearby-tank markers
         rows = np.arange(FPS_H)[None, :, None]                     # sky and ground, darker toward the horizon
         sky = np.array([70, 110, 150]) * (.55 + .45 * (1 - rows / (FPS_H / 2)))
         ground = np.array([58, 82, 48]) * (.45 + .55 * (rows - FPS_H / 2) / (FPS_H / 2))
@@ -193,6 +194,8 @@ class Viewer:
             k = (now - t0) / 600
             r = max(1, int((0.6 + 2.5 * k) * size * self.zoom))
             pygame.draw.circle(self.screen, (255, int(200 * (1 - k)), 60), self.to_screen(p), r, max(1, int(3 * (1 - k))))
+        if self.show_markers:
+            self.draw_markers_topdown()
 
     def draw_heart(self, c, zoom):
         if zoom < 1.5:
@@ -329,6 +332,8 @@ class Viewer:
         cx, cy = w // 2, HUD_H + (h - HUD_H) // 2
         for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):                  # crosshair
             pygame.draw.line(self.screen, (255, 242, 125), (cx + dx * 6, cy + dy * 6), (cx + dx * 16, cy + dy * 16), 2)
+        if self.show_markers:
+            self.draw_markers_fps(pos, a)
         self.minimap(pos, a)
 
     def minimap(self, pos, a):
@@ -349,6 +354,75 @@ class Viewer:
         me = (x + float(pos[0]) * s, y + float(pos[1]) * s)
         pygame.draw.circle(self.screen, (255, 242, 125), me, 4, 1)
         pygame.draw.line(self.screen, (255, 242, 125), me, (me[0] + 12 * math.cos(a), me[1] + 12 * math.sin(a)), 2)
+
+    # ---- markers: where the bases are, and who is near you ----------------------
+    def focus(self):
+        """The unit markers are relative to: the tank you drive, else the selected one."""
+        i = self.control if self.control is not None else self.selected
+        return i if i is not None and self.env.hp[0, i] > 0 else None
+
+    def markers(self):
+        """Every base on either side (destroyed ones too) and, when a unit is focused,
+        the tanks within its radar range: (world pos, kind, team, alive, distance)."""
+        e = self.env
+        pos = e.pos[0].numpy()
+        f = self.focus()
+        out = []
+        for j in range(e.A):
+            alive = e.hp[0, j].item() > 0
+            d = float(np.hypot(*(pos[j] - pos[f]))) if f is not None else None
+            if e.role[0, j] == BASE:
+                out.append((pos[j], 'base', j >= e.N, alive, d))
+            elif alive and f is not None and j != f and d < arena.RADAR_RANGE:
+                out.append((pos[j], 'tank', j >= e.N, True, d))
+        return out
+
+    def marker_icon(self, xy, kind, col, d, arrow=None):
+        x, y = int(xy[0]), int(xy[1])
+        w = self.screen.get_size()[0]
+        if kind == 'base':
+            pygame.draw.rect(self.screen, (10, 20, 20), (x - 7, y - 7, 14, 14))
+            pygame.draw.rect(self.screen, col, (x - 5, y - 5, 10, 10))
+        else:
+            pygame.draw.polygon(self.screen, (10, 20, 20), [(x, y - 8), (x + 7, y + 5), (x - 7, y + 5)])
+            pygame.draw.polygon(self.screen, col, [(x, y - 6), (x + 5, y + 3), (x - 5, y + 3)])
+        if arrow is not None:                                      # points off the screen toward it
+            tip = (x + 16 * math.cos(arrow), y + 16 * math.sin(arrow))
+            pygame.draw.line(self.screen, col, (x + 9 * math.cos(arrow), y + 9 * math.sin(arrow)), tip, 3)
+        if d is not None:
+            text = self.small.render(f'{d:.0f}', True, col)
+            self.screen.blit(text, (x - 10 - text.get_width() if x > w - 60 else x + 10, y - 7))
+
+    def draw_markers_topdown(self):
+        w, h = self.screen.get_size()
+        rect = pygame.Rect(10, HUD_H + 30, w - 20, h - HUD_H - 60)
+        cx, cy = rect.center
+        for p, kind, team, alive, d in self.markers():
+            x, y = self.to_screen(p)
+            col = TEAM[team] if alive else (130, 130, 130)
+            if rect.collidepoint(x, y):
+                if kind == 'tank':                                   # bases on screen speak for themselves
+                    self.marker_icon((x, y - 14 - 1.5 * self.zoom), kind, col, d)
+                continue
+            dx, dy = x - cx, y - cy                                    # off screen: pin it to the edge
+            k = min(rect.w / 2 / max(abs(dx), 1e-6), rect.h / 2 / max(abs(dy), 1e-6))
+            self.marker_icon((cx + dx * k, cy + dy * k), kind, col, d, arrow=math.atan2(dy, dx))
+
+    def draw_markers_fps(self, pos, a):
+        w, h = self.screen.get_size()
+        horizon = HUD_H + (h - HUD_H) // 2
+        edge = [0, 0]                                                  # markers stacked down each edge
+        for p, kind, team, alive, d in sorted(self.markers(), key=lambda m: m[4] or 0):
+            v = p - pos
+            ang = wrap(math.atan2(v[1], v[0]) - a)
+            col = TEAM[team] if alive else (130, 130, 130)
+            if abs(ang) < FOV / 2:
+                y = horizon - (44 if kind == 'base' else 18)
+                self.marker_icon((w / 2 + w / 2 * math.tan(ang) / math.tan(FOV / 2), y), kind, col, d)
+            else:                                                      # behind or beside you: down the edge
+                side = ang > 0
+                self.marker_icon((w - 24 if side else 24, HUD_H + 110 + 22 * edge[side]), kind, col, d, arrow=0. if side else math.pi)
+                edge[side] += 1
 
     # ---- HUD -----------------------------------------------------------------
     def hud(self):
@@ -376,9 +450,9 @@ class Viewer:
             label(self.screen, self.font, f'gun {ready(e.gun_cd[0, i])}   special {ready(e.special_cd[0, i])}   '
                   f'block {ready(e.block_cd[0, i])}', (14, HUD_H + 6), (255, 242, 125))
             aim = 'mouse look' if self.fps else 'mouse aims'
-            keys = f'W/S drive   {aim}   click/SPACE fire   right-click/E special   Q block   V view   M team map   C/ESC let go   P pause'
+            keys = f'W/S drive   {aim}   click/SPACE fire   right-click/E special   Q block   V view   M team map   K markers   C/ESC let go   P pause'
         else:
-            keys = 'C drive a tank   M team map   click select   F follow   wheel zoom   drag pan   SPACE pause   N next game   +/- speed'
+            keys = 'C drive a tank   M team map   K markers   click select   F follow   wheel zoom   drag pan   SPACE pause   N next game   +/- speed'
         if self.note and pygame.time.get_ticks() - self.note_at < 3000:
             r = self.big.render(self.note, True, (255, 150, 130))
             self.screen.blit(r, (w // 2 - r.get_width() // 2, HUD_H + 44))
@@ -484,6 +558,7 @@ class Viewer:
                     if ev.key == pygame.K_SPACE and self.control is None: self.playing = not self.playing
                     if ev.key == pygame.K_p: self.playing = not self.playing
                     if ev.key == pygame.K_m: self.show_map = (self.show_map + 1) % 3
+                    if ev.key == pygame.K_k: self.show_markers = not self.show_markers
                     if ev.key == pygame.K_c or (ev.key == pygame.K_ESCAPE and self.control is not None):
                         if self.control is None:
                             self.take_control()

@@ -218,6 +218,14 @@ first three numbers of each sector's vector and opacity from how much has been
 written there, so you can see the team's picture of the war build up and fade —
 and, in first person, the same overlay on the minimap.
 
+**Markers:** every base on either side is always marked — on screen it is visible
+itself, off screen a square in its team's colour is pinned to the edge of the view
+with an arrow and its distance (a grey square is a destroyed base). Once you select
+or drive a tank, every tank within its radar range (160 tiles) gets a triangle tag
+with its distance, off-screen ones at the edge too. In first person the markers sit
+on the horizon like waypoints, and the ones behind you stack down the sides. **K**
+hides them.
+
 **Watching:** the mouse wheel zooms, drag pans, click selects a unit, **F** follows
 it, **Space** pauses, **N** skips to a new game, and **+ / −** change the speed.
 
