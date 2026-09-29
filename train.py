@@ -61,7 +61,7 @@ ARENAS = {'small': dict(grid=400, tanks=14, bases=3, games=1024, start=0),
           'large': dict(grid=800, tanks=40, bases=7, games=384, start=900)}
 # team spirit: how much of each agent's reward is its team's average, annealed the way
 # OpenAI Five did it -- individual reward learns fights fastest, team reward buys plans
-SPIRIT_FROM, SPIRIT_TO, SPIRIT_ITERS = .3, .7, 1500
+SPIRIT_FROM, SPIRIT_TO, SPIRIT_ITERS = .3, .5, 1500   # capped at .5: above it soldiers lived off the scouts' deliveries
 
 
 class Policy(nn.Module):

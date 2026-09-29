@@ -160,7 +160,7 @@ observation ─► encoder (2 × 512) ─► [encoded observation, digested read
   at 900, then rotates through all three; each game is on one of sixteen maps in
   the four terrain styles. The policy has to work at every scale and in every kind
   of terrain, not memorise one arena.
-- **Team spirit is annealed** from 0.3 to 0.7 over the first 1 500 iterations, the
+- **Team spirit is annealed** from 0.3 to 0.5 over the first 1 500 iterations, the
   way OpenAI Five did it: individual reward learns to fight fastest, team reward
   buys the plays that cost the individual.
 - **Recurrent PPO.** The update replays each game's rollout in order through the
@@ -203,8 +203,9 @@ shooting before they could aim. Hitting a teammate costs what
 hitting an enemy earns (−0.2 per damage), killing one −2.
 
 **Team spirit.** Every agent's reward is blended with its team's average — 30 % at
-the start of training, rising to 70 % — so helping the team pays even when someone
-else gets the credit (OpenAI Five's trick, including the annealing).
+the start of training, rising to 50 % — so helping the team pays even when someone
+else gets the credit (OpenAI Five's trick, including the annealing; above 50 %,
+soldiers learned to live off the scouts' deliveries).
 
 **Bases.** Losing has to hurt more than winning pays, or teams happily trade bases:
 
@@ -214,12 +215,17 @@ else gets the credit (OpenAI Five's trick, including the annealing).
   that takes it;
 - defending: −4 to every member per base lost (−8 to the base itself), and damage
   to an enemy within 60 tiles of one of your bases is worth three times as much;
-- the game: +3 for winning outright, −6 for losing (±1.5 / −3 if decided on the clock).
+- the game: +3 for winning outright, −6 for losing. **The clock is no refuge**: a
+  game decided on the time limit pays its winner only +0.5, costs its loser −6 all
+  the same, and costs *both* sides −2 when it is a tie — sitting back never pays.
 
 **Squads.** A soldier or heavy pays up to −0.01 a turn for drifting away from its
 comrades (nothing while its second-nearest ally is within 12 tiles, all of it 40
-tiles beyond), and the same again once it has gone 60 turns without hitting an enemy
-— so a group has to fight together, not just huddle. A scout pays the same once it
+tiles beyond), and −0.015 a turn once it has gone 60 turns without hitting an enemy
+— so a group has to fight together, not just huddle. It is also **drawn toward the
+nearest enemy** — tank or base — by the same kind of potential-based pull that draws
+scouts to hearts (it nets to zero over the approach, so it guides without being
+farmable). A scout pays the same once it
 has gone 60 turns without delivering or healing (picking up doesn't count — a scout
 that carried its hearts around forever wasn't working). Every tank that hit an enemy in the 20 turns before it
 died gets +1, as much as the killer, so focusing fire pays. A comrade dying close by

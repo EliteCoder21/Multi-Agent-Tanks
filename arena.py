@@ -80,7 +80,10 @@ FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.2, -2.   # friendly fire is on: a hit cos
 # bases: losing hurts more than winning pays (each living teammate -4 per base lost, +2
 # per enemy base taken; the game loss is twice the win), and damage to an enemy within
 # DEFEND_RADIUS of one of your bases is worth 3x
-BASE_LOST_W, BASE_WON_W, WIN_BONUS, TIMEOUT_BONUS, LOSS_SCALE = -4., 2., 3., 1.5, 2.
+BASE_LOST_W, BASE_WON_W, WIN_BONUS, LOSS_SCALE = -4., 2., 3., 2.
+# the clock is no refuge: a game decided on the time limit pays its winner almost nothing,
+# costs its loser as much as being wiped out, and costs *both* sides when it's a tie
+TIMEOUT_WIN, TIMEOUT_LOSS, TIMEOUT_TIE = .5, -6., -2.
 DEFEND_RADIUS, DEFEND_W = 60., .4
 # team spirit: every reward is blended with the team's average, so helping the team pays
 # even when someone else gets the credit -- the glue for board-wide plans. train.py
@@ -98,7 +101,10 @@ COMRADE_NEAR, COMRADE_DEATH_W, COMMANDER_DEATH_W = 25., -.05, -.15
 # (as strong as AWAY_W, or groups just huddle; small next to death, so dying never pays).
 # A scout is idle when it hasn't delivered or healed for that long (picking up doesn't
 # count: a scout that carried its hearts around forever wasn't working)
-IDLE_TURNS, IDLE_W = 60, -.01
+IDLE_TURNS, IDLE_W = 60, -.015
+# ...and a soldier or heavy is drawn toward the nearest enemy (tank or base) the way a
+# scout is drawn toward hearts: potential-based, so it nets to zero and can't be farmed
+ENEMY_PULL, ENEMY_REACH = .3, 100.
 # economy: a scout is paid for fetching hearts and for bringing them home, with a pull
 # toward the nearest heart while it has room and toward the nearest base while carrying
 # (potential-based: each nets to zero over the trip, so it guides without changing what's
@@ -479,8 +485,10 @@ class Arena:
         enemy_near = ((dd < RADAR_RANGE) & ~self.same & tank[:, None]).any(-1)
         pointless = ~enemy_near & (home > DEFEND_RADIUS)
         scout = tank & (role == SCOUT)
+        d_enemy = torch.where(~self.same & (self.hp > 0)[:, None], dd, torch.full_like(dd, FAR)).amin(-1)
         phi = (HEART_PULL * torch.exp(-d_heart / HEART_REACH) * (scout & (self.supply < self.carry))
-               + CARRY_PULL * self.supply / self.carry * torch.exp(-home / HOME_REACH) * scout)
+               + CARRY_PULL * self.supply / self.carry * torch.exp(-home / HOME_REACH) * scout
+               + ENEMY_PULL * torch.exp(-d_enemy / ENEMY_REACH) * fighter)
         pull, self.phi = phi - self.phi, phi
 
         reward = (KILL_W * kills + BASE_KILL_W * base_kills + DAMAGE_W * dealt + BASE_DAMAGE_W * base_dmg + SIEGE_W * siege
@@ -509,8 +517,10 @@ class Arena:
         winner = torch.where(wiped[:, 0] & ~wiped[:, 1], 1, winner)
         winner = torch.where(by_count & (score[:, 0] > score[:, 1]), 0, winner)
         winner = torch.where(by_count & (score[:, 1] > score[:, 0]), 1, winner)
-        size = torch.where(by_count, TIMEOUT_BONUS, WIN_BONUS).unsqueeze(1)
-        outcome = torch.where(winner.unsqueeze(1) == self.team, 1., -LOSS_SCALE) * size * (winner >= 0).unsqueeze(1)
+        won, lost = winner.unsqueeze(1) == self.team, (winner >= 0).unsqueeze(1) & (winner.unsqueeze(1) != self.team)
+        outcome = torch.where(by_count.unsqueeze(1),
+                              torch.where(won, TIMEOUT_WIN, torch.where(lost, TIMEOUT_LOSS, TIMEOUT_TIE)),
+                              torch.where(won, WIN_BONUS, torch.where(lost, -LOSS_SCALE * WIN_BONUS, 0.)))
         reward = (reward + outcome * done.unsqueeze(1)) * alive0
         terminal = alive0 & (died | done.unsqueeze(1))
         self.winner = winner

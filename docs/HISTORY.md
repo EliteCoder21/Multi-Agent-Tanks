@@ -141,6 +141,14 @@ corner too. Two ideas from the literature (see `docs/SURVEY.md`) fixed both halv
 Team spirit is annealed from 0.3 to 0.7 rather than fixed, as OpenAI Five did:
 early on, individual reward is the faster teacher.
 
+**No battles.** With the economy finally working and team spirit heading for 0.7,
+a soldier earned more from the team's deliveries than from fighting, and games
+drifted to the clock with the armies apart. Three changes, none of them a bigger
+kill reward: a potential-based pull toward the nearest enemy for soldiers and
+heavies (the device that got scouts to hearts, and just as unfarmable), a clock that
+pays a timeout winner almost nothing and costs a tie both sides, and team spirit
+capped at 0.5.
+
 ## Speed, again
 
 With the map and the GRU, an iteration had grown to 15 s, 11 s of it the PPO update.
