@@ -106,7 +106,7 @@ IDLE_TURNS, IDLE_W = 60, -.01
 # restores, per heart spent on a tank, and per wall block raised. Kept short of the
 # combat rewards: shared through team spirit, big economy rewards once taught whole
 # armies to farm safely at home instead of fighting
-PICKUP_W, DEPOSIT_W = .4, 1.
+PICKUP_W, DEPOSIT_W = .2, .6              # (.4 and 1. once pickups worked: deliveries x6 in an hour, kills down by two thirds -- farming again)
 HEART_PULL, HEART_REACH, CARRY_PULL, HOME_REACH = .3, 50., .5, 100.
 HEAL_W, RESCUE_W, RESCUE_FRAC = .5, .5, .35
 REPAIR_W, BUILD_W, WALL_W = .05, .1, .1

@@ -157,6 +157,12 @@ chain — a dense, potential-based pull toward the nearest heart for a scout wit
 (it nets to zero over the trip), bigger pickup and delivery rewards, and the block
 head's entropy bonus back to normal.
 
+**...and a ceiling after all.** With the pickup bug fixed and the pull in place,
+the doubled rewards (pickup 0.4, delivery 1.0) sent deliveries up sixfold in an hour
+— and kills down by two thirds, with half the soldiers idle: half of every reward is
+the team's average, so a scout's delivery pays a soldier for standing still. The
+pulls stay (they net to zero); the pickup and delivery rewards went back down.
+
 **Economy rewards need a floor, not just a ceiling.** After the farming episode the
 economy rewards were cut so far that scouts stopped bothering: a few deliveries a
 game, no repairs, no builds. The fix was not to raise them back but to make idling
