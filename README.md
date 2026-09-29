@@ -4,8 +4,8 @@ Two armies of tanks fight over a maze. Every tank and every base on the board is
 controlled by the **same neural network**, trained from scratch by self-play on a
 single GPU. Nothing about tactics is scripted: the network decides where each tank
 drives, when it shoots, when a scout ferries supplies or patches up a wounded ally,
-where barricades go up, what the bases build, and what the team says to each other
-over a learned radio.
+where barricades go up, what the bases build, and what each unit writes onto the
+team's shared **map of the war** for the others to read.
 
 The goal of the project is to see how much coordinated, strategic behaviour —
 squads, base defence, sieges, supply lines, medics, fortifications — can *emerge*
@@ -32,9 +32,9 @@ weights automatically whenever `train.py` saves new ones.
 
 | file | what it is |
 |---|---|
-| `arena.py` | the game: map generation, physics, sensors, rewards, and a scripted benchmark bot |
-| `train.py` | the policy network (encoder → attention radio → GRU memory) and self-play PPO |
-| `viewer.py` | live pygame viewer: a top-down overview, and a first-person mode to play a tank yourself |
+| `arena.py` | the game: map generation (four terrain styles), physics, sensors, rewards, and a scripted benchmark bot |
+| `train.py` | the policy network (encoder → shared team map → GRU memory) and self-play PPO on three board sizes |
+| `viewer.py` | live pygame viewer: a top-down overview with the team map overlaid, and a first-person mode to play a tank yourself |
 | `report/collect.py` | gathers every number a write-up needs from a finished run |
 | `docs/HISTORY.md` | how the design got here: what was tried, what failed, and why |
 
@@ -42,10 +42,12 @@ weights automatically whenever `train.py` saves new ones.
 
 ## The game
 
-The board is a **1125 × 1125** maze of rectangular rock (training uses a smaller
-560 × 560 version — see [Training](#training)). Each team has **5 bases**, spread at
-least 250 tiles apart, and starts with **28 tanks** in a ring around its bases, with
-room to build up to 40.
+The board is a **1125 × 1125** field of rock in one of four terrain styles — rubble
+(lots of small rocks), boulders (fewer, bigger), corridors (long thin walls) or open
+(sparse rocks). Each team has **5 bases**, spread at least 250 tiles apart, and
+starts with **28 tanks** in a ring around its bases, with room to build up to 40.
+Board size and army size are parameters: training runs three sizes at once (see
+[Training](#training)) and the viewer will play any.
 
 **Winning:** a team that loses all of its bases loses. If both still have bases when
 the 1500-turn clock runs out, the team with more bases wins (more tanks breaks a
@@ -93,19 +95,24 @@ One network is shared by every agent on both teams; agents are told apart only b
 what they observe.
 
 ```
-observation ─► encoder (2 × 512) ──┬─► query ───┐
-                                   ├─► key ─────┼─► attention over living teammates ─► what it hears (64)
-                                   └─► message ─┘
-          [encoded observation, what it hears] ─► GRU memory (512) ─► 5 action heads + value
+                                    team map (24 × 24 sectors × 16 numbers, one per team)
+                                          ▲ write (gated)          │ read: 5 × 5 sectors round me
+                                          │                        │       + the whole map pooled to 6 × 6
+observation ─► encoder (2 × 512) ─► [encoded observation, what I read] ─► GRU memory (512) ─► 5 action heads + value
 ```
 
-- **Team radio.** Every agent broadcasts a key and a 64-number message each turn.
-  Each listener forms a query from its own situation and hears its living teammates'
-  messages weighted by attention (4 heads), so it can tune in to whoever matters to
-  it right now — the tanks next to it, a scout that has spotted something, the base
-  under attack across the map. The radio is part of the same differentiable network,
-  so the listener's policy gradient teaches the speaker what's worth saying. Nothing
-  about the language is designed.
+- **The team map.** Each team keeps a grid of **24 × 24 sectors** laid over the
+  board — whatever the board's size, so the same network plays a 400-tile skirmish
+  and an 1125-tile war — and every sector holds a 16-number vector. Every turn each
+  living unit **writes** to the vector of the sector it is standing in (a gated
+  update: it decides how much to overwrite and with what), and **reads** the 5 × 5
+  sectors around it plus a coarse 6 × 6 pooling of the whole board. Nothing about
+  what the numbers mean is designed: the map is part of the same differentiable
+  network, so a reader's policy gradient teaches the writers what is worth putting
+  down. Sectors nobody has visited fade slowly, so stale reports don't linger. This
+  replaced a radio in which every agent broadcast to everyone at once; a spatial
+  map is what a war room actually needs — *where* things are — and it is the only
+  channel between teammates.
 - **Memory.** A GRU lets an agent remember recent turns: an enemy that went behind
   a wall, which way the squad was heading. It is wiped when an agent dies or its
   game ends.
@@ -120,25 +127,28 @@ observation ─► encoder (2 × 512) ──┬─► query ───┐
   `(games, agents, …)` tensor, and `torch.compile` fuses the sensors and physics
   into a handful of GPU kernels. Games reset independently, so training is a
   continuous stream of 32-turn rollouts.
+- **Three board sizes, four terrains.** Iterations take turns on a small board
+  (400 tiles, 14 tanks and 3 bases a side, 1536 games), the medium one (560, 28, 5,
+  1024 games) and a large one (800, 40, 7, 512 games), each game on one of sixteen
+  maps in the four terrain styles — so the policy has to work at every scale and
+  in every kind of terrain, not memorise one arena.
 - **Recurrent PPO.** The update replays each game's rollout in order through the
-  GRU (backpropagation through time), starting from the memory the rollout began
-  with. Minibatches are 32 whole games, 3 epochs per iteration, in bf16.
+  GRU *and the team map* (backpropagation through time), starting from the memory
+  the rollout began with. Minibatches are 32 whole games, 3 epochs per iteration, in
+  bf16.
 - **Opponents.** Both sides of most games are the current policy. In a quarter of
   the games one side is played by someone else — half by a frozen **past snapshot**
   of the policy (a pool of the last 10, refreshed every 50 iterations), half by the
   scripted **raider** bot — so the policy can't forget how to beat older styles and
   has to handle an all-out rush.
-- **A smaller board.** Training uses a 560 × 560 board with the same armies — a
-  quarter of the area — so fights happen far more often. Hearts, rock, base spacing
-  and the clock scale with it.
-
 Every 100 iterations it saves a snapshot to `checkpoints/` and plays full evaluation
-games against the raider and against a copy of itself **with the radio muted** — if
-the messages carry anything useful, the muted copy should lose.
+games on the medium board against the raider and against a copy of itself **cut off
+from the team map** — if the map carries anything useful, that copy should lose.
 
 ```bash
-python train.py --minutes 120      # stop after two hours (default: run until Ctrl-C)
-python train.py --resume           # continue from tank_policy.pt
+python train.py --minutes 120            # stop after two hours (default: run until Ctrl-C)
+python train.py --resume                 # continue from tank_policy.pt
+python train.py --arenas medium,large    # a subset of the board sizes
 ```
 
 The training log prints one line per iteration; `moving` (the share of tank turns
@@ -194,10 +204,19 @@ python viewer.py --grid 200 --tanks 10 --bases 1  # a small skirmish
 python viewer.py --opponent raider                # the policy (blue) against the scripted bot (red)
 ```
 
-Blue and red triangles are tanks (a dot marks scouts and heavies), big squares are
-bases with their health bar and stored hearts, dark rock is permanent, and sandy
-squares are placed blocks, tinted by team. When a game ends the next one starts
-three seconds later with the latest weights.
+Zoomed in, tanks are drawn with treads, hull, turret and barrel (a yellow turret is
+a heavy; a scout carrying a heart shows it); zoomed out they are arrowheads. Bases
+are big squares with a health bar, their stored hearts, and a turret showing where
+a wall order would go. Dark rock is permanent, sandy blocks are placed barricades
+tinted by team, bullets leave a trail, and units that die burst. The HUD shows the
+board size and terrain style. When a game ends the next one starts three seconds
+later with the latest weights.
+
+**The team map:** press **M** to overlay what blue's units have written about each
+sector of the board, again for red's, and again to hide it. Colour comes from the
+first three numbers of each sector's vector and opacity from how much has been
+written there, so you can see the team's picture of the war build up and fade —
+and, in first person, the same overlay on the minimap.
 
 **Watching:** the mouse wheel zooms, drag pans, click selects a unit, **F** follows
 it, **Space** pauses, **N** skips to a new game, and **+ / −** change the speed.
@@ -229,20 +248,22 @@ This plays the saved checkpoints and writes `report/data/`:
   back off, how often soldiers are grouped, how many defenders turn up at a
   threatened base versus a quiet one, siege group sizes, economy, heals, barricades;
 - `ladder.csv` — the final policy against earlier checkpoints;
-- `radio.json` — the muted-radio test, and **who agents actually listen to**: how
-  much more attention goes to nearby teammates, teammates in contact, and bases
-  under attack than a random teammate would get;
+- `radio.json` — the team-map test (a copy cut off from its map), and **what the
+  map encodes**: how well the amount written in each sector tracks where enemy
+  tanks and own tanks actually are;
 - `raider.json` and `speed.json` — the scripted-bot benchmark and throughput.
 
-`report/baseline_mean_radio/` keeps the code and training log of the previous
+`report/baseline_mean_radio/` keeps the code and training log of an earlier
 generation — a radio that simply averaged every teammate's message — for comparison.
 
 ## Performance notes
 
-- On an idle GB10 one game-turn for all 1024 games takes about 60 ms (physics
-  ~37 ms, sensors ~22 ms): roughly **1.5 million agent-steps per second** before the
-  network. A full training iteration — 32 turns of every game plus the PPO update —
-  takes about 7.5 seconds.
+- On an idle GB10 one game-turn for all 1024 medium games takes about 60 ms
+  (physics ~37 ms, sensors ~22 ms): roughly **1.5 million agent-steps per second**
+  before the network. A full training iteration — 32 turns of every game plus the
+  PPO update — takes 7–10 seconds depending on the board.
+- The team map costs little: reads are one gather (25 sectors per agent) and one
+  average-pool; writes are three scatter-adds. All of it is fused by `torch.compile`.
 - Cost grows with the square of the army size (radar, radio and bullet hits compare
   every agent with every other), which is why armies are 28 a side rather than 280.
 - Placed blocks live in one grid cell per 2 × 2 tiles — 80 million cells across 1024

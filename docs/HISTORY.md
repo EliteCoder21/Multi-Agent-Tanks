@@ -81,16 +81,25 @@ blocks filled it and crowded out the walls bases build with hearts. Scattered bl
 also have to cost something (−0.15), while blocks that extend a wall are free, so
 barricades rather than confetti are what pays.
 
-## The radio
+## The radio, then the map
 
 The first radio let each tank pick one of a few discrete "words" every turn. It
 carried exactly zero information: a sampled word gets no gradient, so nothing ever
 taught a speaker what to say. It was replaced by a CommNet-style continuous channel —
 each agent broadcasts a vector and hears the average of its teammates' — which is
 differentiable end to end, and a copy with the radio muted started losing to the
-talking copy (by up to 80–18). The current version replaces the average with
-attention, so an agent can listen selectively rather than to everyone at once;
-`report/collect.py` measures who it actually listens to.
+talking copy (by up to 80–18). Attention over teammates came next, so an agent could
+listen selectively rather than to everyone at once.
+
+Both of those are *who-to-who* channels: a message is tied to the agent that sent
+it, and it is gone next turn. What a war actually needs to share is *where* things
+are, and it should outlive the scout that saw them. So the current design is a
+shared **map**: each team has a 24 × 24 grid of sectors over the board, each holding
+a learned 16-number vector; a unit writes only to the sector it stands in and reads
+the sectors round it plus a coarse view of the whole board. Reports persist (fading
+slowly) after the writer has moved on or died, and the same map fits any board size
+because it is defined in fractions of the board. `report/collect.py` measures how
+well what a team has written tracks where the enemy really is.
 
 ## The network
 
@@ -98,6 +107,13 @@ The first policies were small MLPs (256 units). Swapping in a 2-layer 512-unit e
 and a 512-unit GRU memory, trained with backpropagation through time, made a large
 difference: the recurrent policy won half its games against the scripted raider
 after about 400 iterations, where the MLP had needed about 4 000.
+
+## One arena is not enough
+
+Trained on one board, the policy learned that board: where the bases sit, how far
+the enemy is, how long the game lasts. Training now rotates through three board
+sizes (400, 560 and 800 tiles a side, with armies to match) and sixteen maps in four
+terrain styles, so what it learns has to be about tanks and terrain in general.
 
 ## Self-play
 

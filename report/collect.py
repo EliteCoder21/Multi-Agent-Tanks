@@ -5,7 +5,7 @@
   scalars.csv     every TensorBoard scalar of the latest run: step, tag, value
   behaviour.csv   behaviour probes per checkpoint (full self-play games on the training board)
   ladder.csv      the final policy against earlier checkpoints, from both sides
-  radio.json      radio ablation (talking vs muted copy) and who agents listen to
+  radio.json      the team map ablation (a copy cut off from its map) and what the map encodes
   raider.json     the final policy against the scripted raider
   speed.json      throughput of the simulator, the policy and a training iteration
 """
@@ -14,7 +14,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import arena
 from arena import Arena, BASE, SCOUT, VISION_SECTORS
-from train import load, player, play, act
+from train import load, Player, play, act
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT = os.path.join(ROOT, 'report', 'data')
@@ -34,15 +34,26 @@ def scalars():
                 w.writerow((e.step, tag, e.value))
 
 
-def attention(policy, obs, alive):
-    """The radio's attention weights (B, 2, heads, n, n): listener i -> speaker j."""
-    with torch.no_grad(), torch.autocast('cuda', torch.bfloat16):
-        x = policy.enc(obs)
-        n = x.shape[-2] // 2
-        q, k, _ = policy.radio(x).unflatten(-2, (2, n)).unflatten(-1, (3, policy.heads, -1)).unbind(-3)
-        score = torch.einsum('...ihd,...jhd->...hij', q, k).float() / q.shape[-1] ** .5
-        hears = alive.unflatten(-1, (2, n)).unsqueeze(-2).unsqueeze(-2) & ~torch.eye(n, dtype=torch.bool, device=obs.device)
-        return torch.softmax(score.masked_fill(~hears, -1e9), -1) * hears, hears
+def map_vs_reality(state, env):
+    """How much a team's map says about where things are: per sector, how much has been
+    written there (the vector's length) against the number of enemy tanks and of own
+    tanks actually standing in it. Returns sums for Pearson correlations."""
+    M = state[1]                                                          # (B, 2, S, S, C)
+    B, S = M.shape[0], M.shape[2]
+    activity = M.norm(dim=-1).view(B, 2, S * S)
+    cell = (env.pos / env.grid * S).long().clamp(0, S - 1)
+    idx = cell[..., 0] * S + cell[..., 1]                                 # (B, A)
+    tank = (env.hp > 0) & ~env.is_base
+    count = lambda mask: torch.zeros(B, S * S, device=M.device).scatter_add(1, idx, (tank & mask).float())
+    own = torch.stack((count(env.team == 0), count(env.team == 1)), 1)
+    enemy = torch.stack((count(env.team == 1), count(env.team == 0)), 1)
+    stats = lambda x, y: torch.stack((x.sum(), y.sum(), (x * y).sum(), (x * x).sum(), (y * y).sum(), torch.tensor(float(x.numel()), device=M.device)))
+    return stats(activity, enemy), stats(activity, own)
+
+
+def pearson(s):
+    sx, sy, sxy, sxx, syy, n = s.tolist()
+    return (n * sxy - sx * sy) / max(((n * sxx - sx * sx) * (n * syy - sy * sy)) ** .5, 1e-9)
 
 
 @torch.no_grad()
@@ -51,11 +62,12 @@ def probe(env, policy, radio=False):
     measures (and, with radio=True, who listens to whom)."""
     env.reset_rows(torch.ones(env.B, dtype=torch.bool, device=DEV))
     env.reset_stats()
-    brain = player(policy)
+    brain = Player(policy)
     c = {k: torch.zeros((), device=DEV) for k in (
         'fire_see', 'n_see', 'fire_blind', 'n_blind', 'd_hurt', 'n_hurt', 'd_ok', 'n_ok', 'def_threat', 'n_threat',
         'def_calm', 'n_calm', 'siege', 'n_siege', 'grouped', 'n_fighter', 'first_base_kill', 'n_base_kill',
-        'att_near', 'uni_near', 'att_seeing', 'uni_seeing', 'att_base', 'uni_base', 'att_guard', 'uni_guard')}
+        'map_written')}
+    corr_enemy = corr_own = torch.zeros(6, device=DEV)
     v0 = 16 + 2 * VISION_SECTORS                                   # vision enemy channel
     first_kill = torch.full((env.B,), -1., device=DEV)
     for t in range(env.limit):
@@ -87,18 +99,10 @@ def probe(env, policy, radio=False):
         c['def_calm'] += own_near[base & ~threatened].sum(); c['n_calm'] += (base & ~threatened).sum()
         besieged = base & (foe_near > 0)                           # attackers around an enemy base
         c['siege'] += foe_near[besieged].sum(); c['n_siege'] += besieged.sum()
-        if radio and t % 10 == 0:
-            w, hears = attention(policy, obs, alive)               # (B,2,h,n,n)
-            n = env.N
-            w, hears = w.mean(2), hears[:, :, 0].float()           # average the heads
-            uniform = hears / hears.sum(-1, keepdim=True).clamp(min=1)
-            dteam = dd.unflatten(1, (2, n)).unflatten(-1, (2, n)).diagonal(dim1=1, dim2=3).permute(0, 3, 1, 2)   # (B,2,n,n)
-            listener = (alive & (role != BASE)).unflatten(-1, (2, n)).unsqueeze(-1).float()
-            for key, speaker in (('near', dteam < 30),
-                                 ('seeing', sees.unflatten(-1, (2, n)).unsqueeze(-2).expand_as(dteam)),
-                                 ('base', (role == BASE).unflatten(-1, (2, n)).unsqueeze(-2).expand_as(dteam)),
-                                 ('guard', threatened.unflatten(-1, (2, n)).unsqueeze(-2).expand_as(dteam))):   # bases under attack
-                c['att_' + key] += (w * speaker * listener).sum(); c['uni_' + key] += (uniform * speaker * listener).sum()
+        if radio and t % 10 == 0 and brain.state is not None:
+            e_stats, o_stats = map_vs_reality(brain.state, env)
+            corr_enemy, corr_own = corr_enemy + e_stats, corr_own + o_stats
+            c['map_written'] += (brain.state[1].norm(dim=-1) > .05).float().mean()
         _, _, done, _ = env.step(action)
         lost = (env.hp[:, env.base_slots] <= 0).any(-1) & (first_kill < 0)
         first_kill = torch.where(lost, float(t), first_kill)
@@ -124,8 +128,9 @@ def probe(env, policy, radio=False):
               'pickups', 'deposits', 'builds', 'repairs', 'base_walls', 'blocks_placed', 'block_stops'):
         out[k + '_per_game'] = s[k] / g
     if radio:
-        for k in ('near', 'seeing', 'base', 'guard'):
-            out['attention_lift_' + k] = r('att_' + k, 'uni_' + k)   # >1: listens to them more than to a random teammate
+        out['map_activity_vs_enemy_corr'] = pearson(corr_enemy)     # does what a team wrote track where the enemy is?
+        out['map_activity_vs_own_corr'] = pearson(corr_own)
+        out['map_written_fraction'] = f['map_written'] / max(1, (t // 10) + 1)
     return out
 
 
@@ -150,34 +155,33 @@ def main():
     ladder = []
     for path in cks[::max(1, len(cks) // 6)]:
         other, it = load(path, DEV)
-        w1, l1 = play(env, player(final), player(other))
-        l2, w2 = play(env, player(other), player(final))
+        w1, l1 = play(env, Player(final), Player(other))
+        l2, w2 = play(env, Player(other), Player(final))
         ladder.append({'final_iteration': final_it, 'opponent_iteration': it, 'win': (w1 + w2) / 2, 'loss': (l1 + l2) / 2})
         print(ladder[-1], flush=True)
     with open(os.path.join(OUT, 'ladder.csv'), 'w', newline='') as f:
         w = csv.DictWriter(f, fieldnames=list(ladder[0]) if ladder else ['final_iteration'])
         w.writeheader(); w.writerows(ladder)
 
-    muted = env.team == 1
-    tw, tl = play(env, player(final), player(final, mute=muted))
-    mw, ml = play(env, player(final, mute=env.team == 0), player(final))       # swap sides
-    json.dump({'iteration': final_it, 'talking_vs_muted_win': (tw + ml) / 2, 'talking_vs_muted_loss': (tl + mw) / 2,
+    tw, tl = play(env, Player(final), Player(final, mute=env.team == 1))       # team 1 cut off from its map
+    mw, ml = play(env, Player(final, mute=env.team == 0), Player(final))       # swap sides
+    json.dump({'iteration': final_it, 'map_on_vs_off_win': (tw + ml) / 2, 'map_on_vs_off_loss': (tl + mw) / 2,
                'final_probe': rows[-1]}, open(os.path.join(OUT, 'radio.json'), 'w'), indent=1)
     raider = lambda o, al: env.raider()
-    w1, l1 = play(env, player(final), raider)
-    l2, w2 = play(env, raider, player(final))
+    w1, l1 = play(env, Player(final), raider)
+    l2, w2 = play(env, raider, Player(final))
     json.dump({'iteration': final_it, 'win': (w1 + w2) / 2, 'loss': (l1 + l2) / 2}, open(os.path.join(OUT, 'raider.json'), 'w'), indent=1)
 
     big = Arena(batch=1024, device=DEV, grid=GRID)
     obs, alive = big.observe(), big.hp > 0
-    h = final.memory(obs)
+    state = final.memory(obs)
     def timed(fn, n=20):
         fn(); torch.cuda.synchronize(); t = time.time()
         for _ in range(n): fn()
         torch.cuda.synchronize(); return (time.time() - t) / n
     step = timed(lambda: big.step(torch.zeros(1024, big.A, 6, device=DEV)))
     see = timed(lambda: big.observe())
-    think = timed(lambda: act(final, obs, alive, h))
+    think = timed(lambda: act(final, obs, alive, state))
     json.dump({'games': 1024, 'agents_per_game': big.A, 'step_s': step, 'observe_s': see, 'policy_s': think,
                'agent_steps_per_s_sim_only': 1024 * big.A / (step + see),
                'agent_steps_per_s_with_policy': 1024 * big.A / (step + see + think)},
