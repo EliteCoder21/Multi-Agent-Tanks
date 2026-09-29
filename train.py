@@ -9,7 +9,10 @@ Team map ("the radio"): each team keeps a 32 x 32 grid of 24-number vectors laid
 the board -- one vector per sector, whatever the board's size. Every turn each living
 agent *writes* to the vector of the sector it stands in (a gated update: it decides
 how much to overwrite and with what), and *reads* the 5 x 5 sectors round it plus the
-whole map pooled down to 8 x 8 -- its picture of the entire board. What gets written is learned: it is
+whole map pooled down to 8 x 8 -- its picture of the entire board -- digested by a
+small layer into 256 numbers before it meets the GRU (fed raw, the 2136-number read
+outweighed the agent's own senses four to one, and a team did better with its map
+switched off). What gets written is learned: it is
 all one differentiable pass, so a reader's policy gradient trains the writer. The
 map is wiped when its game ends, and fades slowly so stale reports don't linger.
 
@@ -50,11 +53,12 @@ ARENAS = {'small': dict(grid=400, tanks=14, bases=3, games=1536),
 
 
 class Policy(nn.Module):
-    def __init__(self, hidden=512, cells=32, chan=24, window=5, coarse=8, decay=.99):
+    def __init__(self, hidden=512, cells=32, chan=24, window=5, coarse=8, digest=256, decay=.99):
         super().__init__()
         self.hidden, self.cells, self.chan, self.window, self.coarse, self.decay = hidden, cells, chan, window, coarse, decay
         self.enc = nn.Sequential(nn.Linear(OBS, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU())
-        self.rnn = nn.GRUCell(hidden + (window * window + coarse * coarse) * chan, hidden)
+        self.digest = nn.Sequential(nn.Linear((window * window + coarse * coarse) * chan, digest), nn.ReLU())
+        self.rnn = nn.GRUCell(hidden + digest, hidden)
         self.write = nn.Linear(hidden, 2 * chan)                # gate and value for the sector it stands in
         self.pi = nn.Linear(hidden, sum(HEADS))
         self.v = nn.Linear(hidden, 1)
@@ -81,8 +85,8 @@ class Policy(nn.Module):
         cell = (obs[..., POS] * S).long().clamp(0, S - 1)                        # (B, A, 2): the sector I stand in
         with torch.autocast('cuda', torch.bfloat16, enabled=obs.is_cuda):        # ~2x faster on the GPU
             x = self.enc(obs)
-            read = self.read(Mf, M, cell, team) * using.unsqueeze(-1)
-            h = self.rnn(torch.cat((x, read.to(x.dtype)), -1).flatten(0, 1),
+            read = self.digest(self.read(Mf, M, cell, team).to(x.dtype)) * using.unsqueeze(-1)
+            h = self.rnn(torch.cat((x, read), -1).flatten(0, 1),
                          (h * alive.unsqueeze(-1)).flatten(0, 1)).view(B, A, -1).float()
             gate, value = self.write(h).float().chunk(2, -1)
         M = self.update(Mf, cell, team, torch.sigmoid(gate) * using.unsqueeze(-1), torch.tanh(value), using).view_as(M)

@@ -98,7 +98,9 @@ what they observe.
                                     team map (32 × 32 sectors × 24 numbers, one per team)
                                           ▲ write (gated)          │ read: 5 × 5 sectors round me
                                           │                        │       + the whole map pooled to 8 × 8
-observation ─► encoder (2 × 512) ─► [encoded observation, what I read] ─► GRU memory (512) ─► 5 action heads + value
+                                          │                        ▼
+                                          │                   digest (256)
+observation ─► encoder (2 × 512) ─► [encoded observation, digested read] ─► GRU memory (512) ─► 5 action heads + value
 ```
 
 - **The team map.** Each team keeps a grid of **32 × 32 sectors** laid over the
@@ -107,7 +109,9 @@ observation ─► encoder (2 × 512) ─► [encoded observation, what I read] 
   living unit **writes** to the vector of the sector it is standing in (a gated
   update: it decides how much to overwrite and with what), and **reads** the 5 × 5
   sectors around it plus the whole board pooled down to 8 × 8 — its picture of the
-  entire war, not just its corner of it. Nothing about
+  entire war, not just its corner of it — squeezed by a small layer into 256 numbers
+  before it joins the agent's own senses (fed raw, the read was four times wider than
+  the encoded observation and drowned it: a team did better with its map switched off). Nothing about
   what the numbers mean is designed: the map is part of the same differentiable
   network, so a reader's policy gradient teaches the writers what is worth putting
   down. Sectors nobody has visited fade slowly, so stale reports don't linger. This

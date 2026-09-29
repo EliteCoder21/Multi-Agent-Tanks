@@ -101,6 +101,12 @@ slowly) after the writer has moved on or died, and the same map fits any board s
 because it is defined in fractions of the board. `report/collect.py` measures how
 well what a team has written tracks where the enemy really is.
 
+The first version fed the read — 2 136 numbers for the 5 × 5 window plus the 8 × 8
+pooled board — straight into the GRU beside the 512-number encoded observation. Over
+512 games a team did *better* with its map switched off (54–40): early in training
+the map is mostly noise, and four times as much of it as signal. A 256-unit digest
+layer between the read and the GRU fixed the proportions.
+
 ## The network
 
 The first policies were small MLPs (256 units). Swapping in a 2-layer 512-unit encoder
