@@ -58,7 +58,7 @@ BLOCK_HP, BLOCK_CD, BLOCK_REACH, MAX_BLOCKS = 3., 4, 2.5, 60   # 3 hits; one per
 WALL_RADIUS, WALL_WIDTH, WALL_COST = 14., 5, 1   # a base's wall order: 5 blocks across where its turret points, 1 heart
 
 HEARTS, HEART_RESPAWN, SPAWN_POOL = 400, 250, 4096   # only scouts can pick them up
-PICK_RADIUS, HEAL_RADIUS, HEAL_AMOUNT, HEAL_CD = 1., 4., 2., 4
+PICK_RADIUS, HEAL_RADIUS, HEAL_AMOUNT, HEAL_CD = 2., 4., 2., 4   # a scout moves 3 a turn: at radius 1 it stepped clean over hearts
 DEPOSIT_RADIUS = BASE_CLEAR + 3
 ORDERS = ('none', 'repair', 'build scout', 'build soldier', 'build heavy', 'build wall')
 BUILD_COST = torch.tensor([2., 5., 10.])  # scout, soldier, heavy

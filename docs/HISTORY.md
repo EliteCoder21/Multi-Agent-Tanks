@@ -139,6 +139,13 @@ fresh policy can't yet tell "dead ahead" from "nearby", so it learns to hold fir
 What works is charging only shots with no enemy anywhere in radar range — shooting
 at nothing — and leaving every shot near a fight to the small miss penalty.
 
+**The scouts were stepping over the hearts.** When scouts were sped up from 2.4 to
+3 tiles a turn, the pickup radius stayed at 1 tile — so a scout driving straight at a
+heart went from 1 tile short of it to 2 tiles past it and never picked it up. Pickups
+fell to about one a game and everything downstream (deliveries, repairs, builds,
+heals) died with them, and it took a staged test with one scout, one heart and no
+walls to see it. The radius is 2 now.
+
 **Three action heads that never learned.** Four hundred iterations into the map
 runs, the scouts' unload/heal choice was still a coin flip, the bases' order head
 uniform over its six options, and the place-block head 50/50 — the last held there
