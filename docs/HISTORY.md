@@ -1,5 +1,15 @@
 # How the design got here
 
+*Where it stands (29 Sep 2026):* the shipped policy is iteration 800 of the latest
+run (920 iterations, about two hours on one GPU, on three board sizes) — the
+strongest checkpoint, ahead of the final one 68–30.
+In full self-play games on the medium board it ends 85–94 % of games by taking every
+enemy base (0 % before the base-repair fix), lands a third of its shots with 3 %
+fired at nothing, keeps its economy running (about 100 hearts picked up, 57
+delivered, 9 tanks built, 22 repairs and 22 heals a game), and its team map still
+only just beats a copy without one (52–45 over 512 games). It still loses to the
+scripted rusher. The numbers are in `report/data/` and summarised in the README.
+
 Almost every rule and reward term in this project exists because an earlier version
 without it produced something dumb. This is the short version of that story, roughly
 in order — useful if you want to change a reward and would rather not rediscover

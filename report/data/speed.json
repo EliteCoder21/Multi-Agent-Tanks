@@ -1,0 +1,9 @@
+{
+ "games": 1024,
+ "agents_per_game": 90,
+ "step_s": 0.053897202014923096,
+ "observe_s": 0.031034529209136963,
+ "policy_s": 0.10358215570449829,
+ "agent_steps_per_s_sim_only": 1085106.8107498116,
+ "agent_steps_per_s_with_policy": 488876.45096897363
+}
