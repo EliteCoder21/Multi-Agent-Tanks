@@ -105,7 +105,15 @@ The first version fed the read — 2 136 numbers for the 5 × 5 window plus the 
 pooled board — straight into the GRU beside the 512-number encoded observation. Over
 512 games a team did *better* with its map switched off (54–40): early in training
 the map is mostly noise, and four times as much of it as signal. A 256-unit digest
-layer between the read and the GRU fixed the proportions.
+layer between the read and the GRU fixed the proportions — but not the content: 600
+iterations later what teams had written tracked where their own units were
+(correlation 0.39) and hardly at all where the enemy was (0.09), and the map still
+made no difference to who won. Waiting for writers to invent a language that
+readers can't yet use is slow. So eight of each sector's 24 numbers are now a fixed
+sighting report from the writer's own sensors — enemies on its radar, the nearest
+enemy tank and base, its health, threats to friendly bases — that readers can use
+from the first turn, with the other sixteen left for whatever the network learns to
+add.
 
 ## The network
 

@@ -7,12 +7,16 @@ ago; it is reset when an agent dies or its game ends.
 
 Team map ("the radio"): each team keeps a 32 x 32 grid of 24-number vectors laid over
 the board -- one vector per sector, whatever the board's size. Every turn each living
-agent *writes* to the vector of the sector it stands in (a gated update: it decides
-how much to overwrite and with what), and *reads* the 5 x 5 sectors round it plus the
-whole map pooled down to 8 x 8 -- its picture of the entire board -- digested by a
-small layer into 256 numbers before it meets the GRU (fed raw, the 2136-number read
-outweighed the agent's own senses four to one, and a team did better with its map
-switched off). What gets written is learned: it is
+agent *writes* to the vector of the sector it stands in and *reads* the 5 x 5 sectors
+round it plus the whole map pooled down to 8 x 8 -- its picture of the entire board --
+digested by a small layer into 256 numbers before it meets the GRU (fed raw, the
+2136-number read outweighed the agent's own senses four to one, and a team did better
+with its map switched off). 8 of the 24 numbers are a *sighting report* taken
+straight from the writer's sensors -- enemies on its radar, how close the nearest
+enemy tank and base are, its health, threats to friendly bases -- so the map means
+something from the first turn; the other 16 are a gated, learned write (the writer
+decides how much to overwrite and with what), trained by the readers' policy
+gradient. Old reports fade a little every turn. What gets written is learned: it is
 all one differentiable pass, so a reader's policy gradient trains the writer. The
 map is wiped when its game ends, and fades slowly so stale reports don't linger.
 
@@ -35,8 +39,9 @@ from torch.distributions import Categorical
 from torch.nn import functional as F
 from torch.utils.tensorboard import SummaryWriter
 import arena
-from arena import Arena, OBS, POS
+from arena import Arena, OBS, POS, RADAR, RADAR_SECTORS as RS
 
+FACTS = 8                                 # channels of each sector's vector that are a sensor report, not learned
 HEADS = (9, 2, 2, len(arena.ORDERS), 2)   # move (3 throttle x 3 steer), fire, special, base order, place block
 THROTTLE = torch.tensor([-.5, 0., 1.])
 STEER = torch.tensor([-1., 0., 1.])
@@ -59,7 +64,7 @@ class Policy(nn.Module):
         self.enc = nn.Sequential(nn.Linear(OBS, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU())
         self.digest = nn.Sequential(nn.Linear((window * window + coarse * coarse) * chan, digest), nn.ReLU())
         self.rnn = nn.GRUCell(hidden + digest, hidden)
-        self.write = nn.Linear(hidden, 2 * chan)                # gate and value for the sector it stands in
+        self.write = nn.Linear(hidden, 2 * (chan - FACTS))      # gate and value of the learned part of a write
         self.pi = nn.Linear(hidden, sum(HEADS))
         self.v = nn.Linear(hidden, 1)
         r = torch.arange(window) - window // 2
@@ -89,8 +94,20 @@ class Policy(nn.Module):
             h = self.rnn(torch.cat((x, read), -1).flatten(0, 1),
                          (h * alive.unsqueeze(-1)).flatten(0, 1)).view(B, A, -1).float()
             gate, value = self.write(h).float().chunk(2, -1)
-        M = self.update(Mf, cell, team, torch.sigmoid(gate) * using.unsqueeze(-1), torch.tanh(value), using).view_as(M)
+        gate = torch.cat((torch.ones_like(obs[..., :FACTS]), torch.sigmoid(gate)), -1) * using.unsqueeze(-1)
+        value = torch.cat((self.facts(obs), torch.tanh(value)), -1)
+        M = self.update(Mf, cell, team, gate, value, using).view_as(M)
         return self.pi(h).float(), self.v(h).squeeze(-1).float(), (h, M)
+
+    @staticmethod
+    def facts(obs):
+        """The sighting report an agent writes into its sector, straight from its senses:
+        here I am; enemy tanks in how many radar directions; how close the nearest enemy
+        tank, enemy base and friendly base are; my health; the worst threat I see to a
+        friendly base; whether I am a base."""
+        radar = lambda i: obs[..., RADAR + i * RS:RADAR + (i + 1) * RS]
+        return torch.stack((torch.ones_like(obs[..., 0]), (radar(3) < 1).float().mean(-1), 1 - radar(3).amin(-1),
+                            1 - radar(6).amin(-1), 1 - radar(5).amin(-1), obs[..., 4], radar(7).amax(-1), obs[..., 3]), -1)
 
     def read(self, Mf, M, cell, team):
         """What an agent sees on its team's map: the window x window sectors round it,

@@ -73,7 +73,7 @@ and for shooting your own team's blocks.
 
 ## What an agent senses
 
-Each agent gets a 196-number observation, with the same layout for tanks and bases:
+Each agent gets a 212-number observation, with the same layout for tanks and bases:
 
 - **itself** — its role, health, hearts carried, cooldowns, position, heading, and
   how many tanks and bases each side still has;
@@ -81,8 +81,8 @@ Each agent gets a 196-number observation, with the same layout for tanks and bas
   sector: the nearest rock and placed block along the sector's centre line, the
   nearest friendly and enemy tank, the most badly hurt friendly tank, the nearest
   friendly and enemy base (bases show up at any distance), **how many enemy tanks
-  are closing on a friendly base** in that direction, and **how damaged the enemy
-  base** there is;
+  are closing on a friendly base** in that direction, **how damaged the enemy
+  base** there is, and the nearest heart (so scouts can find what they are for);
 - **vision** — 9 sectors in a forward cone, 48 tiles, *blocked by walls*. Per
   sector: rock, placed blocks, the nearest enemy, and the nearest heart.
 
@@ -111,10 +111,13 @@ observation ─► encoder (2 × 512) ─► [encoded observation, digested read
   sectors around it plus the whole board pooled down to 8 × 8 — its picture of the
   entire war, not just its corner of it — squeezed by a small layer into 256 numbers
   before it joins the agent's own senses (fed raw, the read was four times wider than
-  the encoded observation and drowned it: a team did better with its map switched off). Nothing about
-  what the numbers mean is designed: the map is part of the same differentiable
-  network, so a reader's policy gradient teaches the writers what is worth putting
-  down. Sectors nobody has visited fade slowly, so stale reports don't linger. This
+  the encoded observation and drowned it: a team did better with its map switched off).
+  Eight of the 24 numbers are a **sighting report** taken straight from the writer's
+  sensors — here I am, enemies in how many radar directions, how close the nearest
+  enemy tank and enemy base are, my health, the worst threat I see to a friendly base
+  — so the map means something from the first turn. The other sixteen are entirely
+  learned: the map is part of the same differentiable network, so a reader's policy
+  gradient teaches the writers what is worth putting down. Sectors nobody has visited fade slowly, so stale reports don't linger. This
   replaced a radio in which every agent broadcast to everyone at once; a spatial
   map is what a war room actually needs — *where* things are — and it is the only
   channel between teammates.
@@ -192,7 +195,8 @@ used, turned up).
 comrades (nothing while its second-nearest ally is within 12 tiles, all of it 40
 tiles beyond), and the same again once it has gone 60 turns without hitting an enemy
 — so a group has to fight together, not just huddle. A scout pays the same once it
-has gone 60 turns without picking up, delivering or healing. Every tank that hit an enemy in the 20 turns before it
+has gone 60 turns without delivering or healing (picking up doesn't count — a scout
+that carried its hearts around forever wasn't working). Every tank that hit an enemy in the 20 turns before it
 died gets +1, as much as the killer, so focusing fire pays. A comrade dying close by
 costs a little (−0.05, or −0.15 for a heavy). Only actually overlapping another tank
 is penalised (−0.1 a turn). These squad terms are deliberately mild: early in

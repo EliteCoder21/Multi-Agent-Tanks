@@ -16,7 +16,8 @@ Each agent sees through two kinds of rays (bases see 5x farther):
               nearest friendly and enemy tank, how hurt the neediest friendly tank is,
               the nearest friendly and enemy base (at any distance), how many enemy
               tanks are closing on a friendly base there, and how damaged the enemy
-              base there is -- where to defend and where to attack.
+              base there is -- where to defend and where to attack -- and the
+              nearest heart, so scouts can find what they're for.
   * vision -- 9 sectors in a forward cone, blocked by walls. Per sector: the wall,
               placed block, nearest enemy (tank or base) and heart in front of it.
 """
@@ -94,7 +95,8 @@ FORM_MAX, AWAY_SCALE, AWAY_W, STACK_W = 12., 40., -.01, -.1
 COMRADE_NEAR, COMRADE_DEATH_W, COMMANDER_DEATH_W = 25., -.05, -.15
 # ...and one that hasn't hit an enemy for IDLE_TURNS pays as much again, wherever it is
 # (as strong as AWAY_W, or groups just huddle; small next to death, so dying never pays).
-# A scout is idle when it hasn't picked up, delivered or healed for that long
+# A scout is idle when it hasn't delivered or healed for that long (picking up doesn't
+# count: a scout that carried its hearts around forever wasn't working)
 IDLE_TURNS, IDLE_W = 60, -.01
 # economy: a scout is paid for fetching hearts and for bringing them home, with a pull
 # toward the nearest base while carrying (potential-based: it nets to zero over a round
@@ -112,8 +114,9 @@ REPAIR_W, BUILD_W, WALL_W = .05, .1, .1
 # every enemy tank it stops at the placer's bases -- barricades go up where they matter
 BLOCK_PLACE_W, BLOCK_WALL_W, BLOCK_SAVE_W, BLOCK_STOP_W = -.15, .15, .5, .2
 
-OBS = 4 + 8 + 2 + 2 + 4 * VISION_SECTORS + 9 * RADAR_SECTORS
+OBS = 4 + 8 + 2 + 2 + 4 * VISION_SECTORS + 10 * RADAR_SECTORS
 POS = slice(12, 14)                       # where an agent's position (as a fraction of the board) sits in its observation
+RADAR = 16 + 4 * VISION_SECTORS           # where the radar channels start: wall, block, friend, enemy, need, own base, foe base, threat, foe damage, heart
 FAR = 1e5
 _maps = {}
 
@@ -198,7 +201,7 @@ class Arena:
         self.pos, self.heading, self.hp, self.supply = z(self.A, 2), z(self.A), z(self.A), z(self.A)
         self.gun_cd, self.special_cd, self.block_cd = z(self.A), z(self.A), z(self.A)
         self.born = z(self.A)                                      # turn each agent (re)appeared, for idleness
-        self.last_useful = z(self.A)                               # turn a scout last picked up, delivered or healed
+        self.last_useful = z(self.A)                               # turn a scout last delivered or healed
         self.phi = z(self.A)                                       # carry-home shaping potential
         self.last_hit = z(self.A, self.A)                          # [target, shooter] turn of the last enemy hit
         self.role = torch.zeros(B, self.A, dtype=torch.long, device=d)
@@ -367,6 +370,8 @@ class Arena:
         h_ok = self.heart_alive[:, None] & (h_rel.abs() < VISION_SPAN) & (h_dist < vision_r[..., None])
         h_idx = ((h_rel + VISION_SPAN) / (2 * VISION_SPAN) * VISION_SECTORS).floor().long()
         v_heart = self._sector(h_idx, h_dist, h_ok, VISION_SECTORS)
+        hr_idx = ((h_rel + math.pi) / (2 * math.pi) * RADAR_SECTORS).long()
+        r_heart = self._sector(hr_idx, h_dist, self.heart_alive[:, None] & (h_dist < radar_r[..., None]), RADAR_SECTORS)
         v_enemy = torch.where(v_enemy < v_stop, v_enemy, torch.full_like(v_enemy, FAR))
         v_heart = torch.where(v_heart < v_stop, v_heart, torch.full_like(v_heart, FAR))
 
@@ -386,7 +391,7 @@ class Arena:
             self.pos / self.grid, torch.stack((self.heading.cos(), self.heading.sin()), -1),
             clip(v_wall, vision_r), clip(v_block, vision_r), clip(v_enemy, vision_r), clip(v_heart, vision_r),
             clip(r_wall, radar_r), clip(r_block, radar_r), clip(r_friend, radar_r), clip(r_enemy, radar_r), r_need,
-            clip(r_own, diag), clip(r_foe, diag), r_threat, r_foe_dmg,
+            clip(r_own, diag), clip(r_foe, diag), r_threat, r_foe_dmg, clip(r_heart, radar_r),
         ), -1)
 
     # ---- dynamics -----------------------------------------------------------
@@ -615,7 +620,6 @@ class Arena:
         won = can & (mind <= best.gather(1, h))
         taken = torch.zeros(self.B, self.H, device=self.device).scatter_add(1, h, won.float()) > 0
         self.supply += won.float()
-        self.last_useful = torch.where(won, self.t.view(-1, 1).float(), self.last_useful)
         self.heart_alive &= ~taken
         self.heart_timer = torch.where(taken, float(HEART_RESPAWN), self.heart_timer)
         return won.float()
