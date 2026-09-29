@@ -115,6 +115,19 @@ the enemy is, how long the game lasts. Training now rotates through three board
 sizes (400, 560 and 800 tiles a side, with armies to match) and sixteen maps in four
 terrain styles, so what it learns has to be about tanks and terrain in general.
 
+**Cheap shots get sprayed — but charging every shot stops the shooting.** With only
+wasted shots penalised, and lightly (−0.03), tanks fired constantly. Charging every
+shot (−0.02) and every miss (−0.08) fixed the spraying and broke learning: at 5 %
+accuracy a shot has negative expected value, so within 30 iterations the policy fired
+a tenth as often and never learned to aim. What works is charging only *blind* shots
+— fired with no enemy in the forward cone — so aiming at something is always allowed.
+
+**Economy rewards need a floor, not just a ceiling.** After the farming episode the
+economy rewards were cut so far that scouts stopped bothering: a few deliveries a
+game, no repairs, no builds. The fix was not to raise them back but to make idling
+cost scouts the way it costs soldiers, and to pay a scout for heading home while
+carrying (a potential-based term that nets to zero over the trip).
+
 ## Self-play
 
 Pure self-play drifts into styles that beat themselves but not much else — at one
