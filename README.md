@@ -95,18 +95,19 @@ One network is shared by every agent on both teams; agents are told apart only b
 what they observe.
 
 ```
-                                    team map (24 × 24 sectors × 16 numbers, one per team)
+                                    team map (32 × 32 sectors × 24 numbers, one per team)
                                           ▲ write (gated)          │ read: 5 × 5 sectors round me
-                                          │                        │       + the whole map pooled to 6 × 6
+                                          │                        │       + the whole map pooled to 8 × 8
 observation ─► encoder (2 × 512) ─► [encoded observation, what I read] ─► GRU memory (512) ─► 5 action heads + value
 ```
 
-- **The team map.** Each team keeps a grid of **24 × 24 sectors** laid over the
+- **The team map.** Each team keeps a grid of **32 × 32 sectors** laid over the
   board — whatever the board's size, so the same network plays a 400-tile skirmish
-  and an 1125-tile war — and every sector holds a 16-number vector. Every turn each
+  and an 1125-tile war — and every sector holds a 24-number vector. Every turn each
   living unit **writes** to the vector of the sector it is standing in (a gated
   update: it decides how much to overwrite and with what), and **reads** the 5 × 5
-  sectors around it plus a coarse 6 × 6 pooling of the whole board. Nothing about
+  sectors around it plus the whole board pooled down to 8 × 8 — its picture of the
+  entire war, not just its corner of it. Nothing about
   what the numbers mean is designed: the map is part of the same differentiable
   network, so a reader's policy gradient teaches the writers what is worth putting
   down. Sectors nobody has visited fade slowly, so stale reports don't linger. This
@@ -161,40 +162,49 @@ This is where most of the work went. Each term is there because, without it,
 self-play found something degenerate instead — [docs/HISTORY.md](docs/HISTORY.md)
 tells those stories. All the weights are named constants near the top of `arena.py`.
 
-**Individual credit.** +1 per kill, +0.2 per damage dealt, −0.03 per wasted shot,
-−1 for dying. Hitting a teammate costs what hitting an enemy earns (−0.2 per
-damage), and killing one costs −2.
+**Individual credit.** +1 per kill, +0.2 per damage dealt, −1 for dying. **Every
+shot costs**: −0.02 to fire a bullet, −0.06 a missile, and −0.08 more for a bullet
+that hits nothing — so spraying is a steady loss and only aimed fire pays. Hitting a
+teammate costs what hitting an enemy earns (−0.2 per damage), killing one −2.
 
-**Team spirit.** Every agent's reward is blended 30 % with its team's average, so
-helping the team pays even when someone else lands the kill (the same trick OpenAI
-Five used).
+**Team spirit.** Every agent's reward is blended **half-and-half** with its team's
+average, so helping the team pays as much as helping yourself (the trick OpenAI Five
+used, turned up).
 
 **Bases.** Losing has to hurt more than winning pays, or teams happily trade bases:
 
-- attacking: +3 to the tank that destroys a base, +0.1 extra per damage to a base,
-  and +2 to every member of the team that takes it;
+- attacking: +3 to the tank that destroys a base, +0.1 extra per damage to a base —
+  and **+0.1 more per allied tank also at that base** (beyond the first, up to four),
+  so a massed siege on one target beats trickling in; +2 to every member of the team
+  that takes it;
 - defending: −4 to every member per base lost (−8 to the base itself), and damage
   to an enemy within 60 tiles of one of your bases is worth three times as much;
 - the game: +3 for winning outright, −6 for losing (±1.5 / −3 if decided on the clock).
 
 **Squads.** A soldier or heavy pays up to −0.01 a turn for drifting away from its
 comrades (nothing while its second-nearest ally is within 12 tiles, all of it 40
-tiles beyond), and the same again once it has gone 60 turns without hitting an enemy — so a group has to fight
-together, not just huddle. Every tank that hit an enemy in the 20 turns before it
+tiles beyond), and the same again once it has gone 60 turns without hitting an enemy
+— so a group has to fight together, not just huddle. A scout pays the same once it
+has gone 60 turns without picking up, delivering or healing. Every tank that hit an enemy in the 20 turns before it
 died gets +1, as much as the killer, so focusing fire pays. A comrade dying close by
 costs a little (−0.05, or −0.15 for a heavy). Only actually overlapping another tank
 is penalised (−0.1 a turn). These squad terms are deliberately mild: early in
 training, when nothing can aim yet, every one of them lands on *doing something*, and
 at twice these values fresh policies learned to stand still.
 
-**Barricades.** A scattered block costs −0.15; one that extends a wall of your team's
-blocks is free. The tank that placed a block earns +0.5 for every enemy bullet it
-stops, and +0.1 for every enemy tank it stops near one of its bases.
+**Barricades.** A block dropped with no enemy in radar range and no base of yours
+nearby is pointless and costs −0.15; anywhere else placing is free, and one that
+extends a wall of your team's blocks earns +0.15. The tank that placed a block earns
++0.5 for every enemy bullet it stops and +0.2 for every enemy tank it stops at one of
+its bases.
 
-**Economy and medics** — kept small on purpose: shared through team spirit, big
-economy rewards taught entire armies to stay home and farm. +0.1 per heart picked
-up, +0.4 per heart delivered, +0.5 per hp a scout heals and +0.5 more for reaching an
-ally below 35 % health, +0.1 per heart a base spends on a tank and per wall block.
+**Economy and medics.** A scout gets +0.2 per heart picked up and +0.6 per heart
+delivered, with a pull toward the nearest base while carrying (potential-based: it
+nets to zero over a round trip, so it guides without changing what is worth doing);
++0.5 per hp it heals on a teammate within reach and +0.5 more for reaching one below
+35 % health. A base gets +0.05 per hp a repair restores, +0.1 per heart spent on a
+tank and per wall block raised. Still short of the combat rewards: shared through
+team spirit, big economy rewards once taught entire armies to stay home and farm.
 
 ## The viewer
 

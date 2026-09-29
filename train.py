@@ -5,11 +5,11 @@ Policy: observation -> 2-layer encoder -> + what it reads off the team's map -> 
 memory -> actions. The GRU (512 units) lets an agent remember what it saw a few turns
 ago; it is reset when an agent dies or its game ends.
 
-Team map ("the radio"): each team keeps a CELLS x CELLS grid of CHAN-number vectors
-laid over the board -- one vector per sector, whatever the board's size. Every turn
-each living agent *writes* to the vector of the sector it stands in (a gated update:
-it decides how much to overwrite and with what), and *reads* the 5 x 5 sectors round
-it plus a coarse 6 x 6 pooling of the whole map. What gets written is learned: it is
+Team map ("the radio"): each team keeps a 32 x 32 grid of 24-number vectors laid over
+the board -- one vector per sector, whatever the board's size. Every turn each living
+agent *writes* to the vector of the sector it stands in (a gated update: it decides
+how much to overwrite and with what), and *reads* the 5 x 5 sectors round it plus the
+whole map pooled down to 8 x 8 -- its picture of the entire board. What gets written is learned: it is
 all one differentiable pass, so a reader's policy gradient trains the writer. The
 map is wiped when its game ends, and fades slowly so stale reports don't linger.
 
@@ -50,7 +50,7 @@ ARENAS = {'small': dict(grid=400, tanks=14, bases=3, games=1536),
 
 
 class Policy(nn.Module):
-    def __init__(self, hidden=512, cells=24, chan=16, window=5, coarse=6, decay=.99):
+    def __init__(self, hidden=512, cells=32, chan=24, window=5, coarse=8, decay=.99):
         super().__init__()
         self.hidden, self.cells, self.chan, self.window, self.coarse, self.decay = hidden, cells, chan, window, coarse, decay
         self.enc = nn.Sequential(nn.Linear(OBS, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU())

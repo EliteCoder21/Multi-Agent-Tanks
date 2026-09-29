@@ -65,8 +65,13 @@ REPAIR_SELF, REPAIR_NEAR, ORDER_CD = 10., 2., 5
 
 # ---- reward --------------------------------------------------------------------
 # individual credit: the agent that lands the kill, wastes the shot or dies feels it
-KILL_W, BASE_KILL_W, DAMAGE_W, MISS_W = 1., 3., .2, -.03
-BASE_DAMAGE_W = .1                        # extra per damage to an enemy base: sieges pay as they go
+KILL_W, BASE_KILL_W, DAMAGE_W = 1., 3., .2
+# every shot costs a little and a wasted one a lot more, so spraying is a loss and only
+# aimed fire pays (a bullet that hits nothing: -.1; one that lands: +.2 per damage)
+SHOT_W, MISSILE_W, MISS_W = -.02, -.06, -.08
+# bases: extra per damage to an enemy base, and more again for every allied tank (beyond
+# the first, up to four) also at that base -- mass on one target instead of trickling in
+BASE_DAMAGE_W, SIEGE_W = .1, .1
 DEATH_W, BASE_DEATH_W = -1., -8.
 FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.2, -2.   # friendly fire is on: a hit costs what an enemy hit earns, a kill a lot more
 # bases: losing hurts more than winning pays (each living teammate -4 per base lost, +2
@@ -74,9 +79,9 @@ FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.2, -2.   # friendly fire is on: a hit cos
 # DEFEND_RADIUS of one of your bases is worth 3x
 BASE_LOST_W, BASE_WON_W, WIN_BONUS, TIMEOUT_BONUS, LOSS_SCALE = -4., 2., 3., 1.5, 2.
 DEFEND_RADIUS, DEFEND_W = 60., .4
-# team spirit: every reward is blended 30% with the team's average, so helping the team
-# pays even when someone else gets the credit -- the glue for team-wide plans
-TEAM_SPIRIT = .3
+# team spirit: every reward is blended half-and-half with the team's average, so helping
+# the team pays as much as helping yourself -- the glue for board-wide plans
+TEAM_SPIRIT = .5
 ASSIST_W, ASSIST_WINDOW = 1., 20          # everyone who hit an enemy in its last 20 turns gets as much as the killer
 # comrades: a soldier or heavy pays up to AWAY_W a turn for drifting from the group --
 # nothing while its second-nearest allied tank is within FORM_MAX, all of it by FORM_MAX +
@@ -86,16 +91,24 @@ ASSIST_W, ASSIST_WINDOW = 1., 20          # everyone who hit an enemy in its las
 FORM_MAX, AWAY_SCALE, AWAY_W, STACK_W = 12., 40., -.01, -.1
 COMRADE_NEAR, COMRADE_DEATH_W, COMMANDER_DEATH_W = 25., -.05, -.15
 # ...and one that hasn't hit an enemy for IDLE_TURNS pays as much again, wherever it is
-# (as strong as AWAY_W, or groups just huddle; small next to death, so dying never pays)
+# (as strong as AWAY_W, or groups just huddle; small next to death, so dying never pays).
+# A scout is idle when it hasn't picked up, delivered or healed for that long
 IDLE_TURNS, IDLE_W = 60, -.01
-# economy (kept modest: shared through team spirit, big economy rewards taught whole
-# armies to farm safely at home instead of fighting)
-PICKUP_W, DEPOSIT_W, BUILD_W, WALL_W = .1, .4, .1, .1   # build: per heart spent; wall: per block raised
-HEAL_W, RESCUE_W, RESCUE_FRAC = .5, .5, .35             # per hp healed; extra for an ally below 35%
-# blocks: scattered singles cost, one that extends a wall of your team's blocks is free,
-# and a block pays its placer for every enemy bullet it stops and every enemy tank it
-# stops near the placer's bases -- barricades go up where the fighting is
-BLOCK_PLACE_W, BLOCK_WALL_W, BLOCK_SAVE_W, BLOCK_STOP_W = -.15, .15, .5, .1
+# economy: a scout is paid for fetching hearts and for bringing them home, with a pull
+# toward the nearest base while carrying (potential-based: it nets to zero over a round
+# trip, so it guides without changing what's worth doing), and for healing a teammate
+# within reach -- more for one that's nearly dead. A base is paid for the hp a repair
+# restores, per heart spent on a tank, and per wall block raised. Kept short of the
+# combat rewards: shared through team spirit, big economy rewards once taught whole
+# armies to farm safely at home instead of fighting
+PICKUP_W, DEPOSIT_W, CARRY_PULL = .2, .6, .3
+HEAL_W, RESCUE_W, RESCUE_FRAC = .5, .5, .35
+REPAIR_W, BUILD_W, WALL_W = .05, .1, .1
+# blocks: a block dropped with no enemy in radar range and no base of yours nearby is
+# pointless and costs; anywhere else placing is free, one that extends a wall of your
+# team's blocks pays, and a block pays its placer for every enemy bullet it stops and
+# every enemy tank it stops at the placer's bases -- barricades go up where they matter
+BLOCK_PLACE_W, BLOCK_WALL_W, BLOCK_SAVE_W, BLOCK_STOP_W = -.15, .15, .5, .2
 
 OBS = 4 + 8 + 2 + 2 + 4 * VISION_SECTORS + 9 * RADAR_SECTORS
 POS = slice(12, 14)                       # where an agent's position (as a fraction of the board) sits in its observation
@@ -183,6 +196,8 @@ class Arena:
         self.pos, self.heading, self.hp, self.supply = z(self.A, 2), z(self.A), z(self.A), z(self.A)
         self.gun_cd, self.special_cd, self.block_cd = z(self.A), z(self.A), z(self.A)
         self.born = z(self.A)                                      # turn each agent (re)appeared, for idleness
+        self.last_useful = z(self.A)                               # turn a scout last picked up, delivered or healed
+        self.phi = z(self.A)                                       # carry-home shaping potential
         self.last_hit = z(self.A, self.A)                          # [target, shooter] turn of the last enemy hit
         self.role = torch.zeros(B, self.A, dtype=torch.long, device=d)
         self.b_pos, self.b_vel = z(self.A, K, 2), z(self.A, K, 2)
@@ -259,7 +274,8 @@ class Arena:
         self.pos[rows] = pos
         self.heading[rows] = (self._rand(len(rows), self.A) * 2 - 1) * math.pi
         self.hp[rows] = self.tables['max_hp'][role] * alive
-        for x in (self.supply, self.gun_cd, self.special_cd, self.block_cd, self.born, self.heart_timer, self.blocks):
+        for x in (self.supply, self.gun_cd, self.special_cd, self.block_cd, self.born, self.last_useful, self.phi,
+                  self.heart_timer, self.blocks):
             x[rows] = 0
         self.last_hit[rows] = -1e9
         self.block_owner[rows] = -1
@@ -388,8 +404,9 @@ class Arena:
         throttle, steer, fire, special, order, place = action.unbind(-1)
         role = self.role
         is_b = role == BASE
-        foe_base = ~self.same & (is_b & alive0)[:, None]
-        intruding = torch.where(foe_base, torch.cdist(self.pos, self.pos), FAR).amin(-1) < DEFEND_RADIUS
+        dd0 = torch.cdist(self.pos, self.pos)
+        intruding = torch.where(~self.same & (is_b & alive0)[:, None], dd0, FAR).amin(-1) < DEFEND_RADIUS
+        attackers = ((dd0 < DEFEND_RADIUS) & ~self.same & (alive0 & ~is_b)[:, :, None]).sum(1).float()   # enemy tanks at each base
 
         # move, sliding along whatever is in the way
         self.heading = torch.where(alive0, wrap(self.heading + steer.clamp(-1, 1) * TURN), self.heading)
@@ -424,7 +441,7 @@ class Arena:
         picked = self._pickup(alive0)
         deposited, healed, rescued = self._scout_special(alive0, special)
         built, spent, repaired, base_walls = self._base_orders(alive0, order, u, counts)
-        dealt, base_dmg, friendly_dmg, kills, base_kills, friendly_kills, misses, saves, defend = self._bullets(alive0, intruding)
+        dealt, base_dmg, friendly_dmg, kills, base_kills, friendly_kills, misses, saves, defend, siege = self._bullets(alive0, intruding, attackers)
         died = alive0 & (self.hp <= 0)
         respawn = ~self.heart_alive & (self.heart_timer == 0)
         fresh = self.spawn_pool.gather(1, (self._rand(B, self.H) * SPAWN_POOL).long().unsqueeze(-1).expand(-1, -1, 2))
@@ -443,16 +460,23 @@ class Arena:
         away = ((second - FORM_MAX) / AWAY_SCALE).clamp(0, 1) * fighter
         fallen = torch.where(role == COMMANDER, COMMANDER_DEATH_W, COMRADE_DEATH_W) * (died & ~is_b)
         comrade_loss = torch.bmm(((dd < COMRADE_NEAR) & self.same).float(), fallen.unsqueeze(-1)).squeeze(-1) * tank
-        idle = fighter & (self.t.view(B, 1) - torch.maximum(self.last_hit.amax(1), self.born) > IDLE_TURNS)
+        useful = torch.where(role == SCOUT, self.last_useful, self.last_hit.amax(1))
+        idle = tank & (self.t.view(B, 1) - torch.maximum(useful, self.born) > IDLE_TURNS)
+        home = torch.where(self.same & (is_b & (self.hp > 0))[:, None], dd, torch.full_like(dd, FAR)).amin(-1)
+        enemy_near = ((dd < RADAR_RANGE) & ~self.same & tank[:, None]).any(-1)
+        pointless = ~enemy_near & (home > DEFEND_RADIUS)
+        phi = CARRY_PULL * self.supply * (1 - home / self.grid) * (tank & (role == SCOUT))
+        pull, self.phi = phi - self.phi, phi
 
-        reward = (KILL_W * kills + BASE_KILL_W * base_kills + DAMAGE_W * dealt + BASE_DAMAGE_W * base_dmg + MISS_W * misses
+        reward = (KILL_W * kills + BASE_KILL_W * base_kills + DAMAGE_W * dealt + BASE_DAMAGE_W * base_dmg + SIEGE_W * siege
+                  + SHOT_W * shoot + MISSILE_W * (launch | big) + MISS_W * misses
                   + FRIENDLY_DAMAGE_W * friendly_dmg + FRIENDLY_KILL_W * friendly_kills
                   + torch.where(is_b, BASE_DEATH_W, DEATH_W) * died
                   + BASE_LOST_W * bases_lost[:, self.team] + BASE_WON_W * bases_lost[:, 1 - self.team] + DEFEND_W * defend
                   + ASSIST_W * assists + AWAY_W * away + STACK_W * overlap + comrade_loss + IDLE_W * idle
-                  + PICKUP_W * picked + DEPOSIT_W * deposited + BUILD_W * spent + WALL_W * base_walls
-                  + HEAL_W * healed + RESCUE_W * rescued
-                  + BLOCK_PLACE_W * placed + BLOCK_WALL_W * walled + BLOCK_SAVE_W * saves + BLOCK_STOP_W * block_stops)
+                  + PICKUP_W * picked + DEPOSIT_W * deposited + pull + HEAL_W * healed + RESCUE_W * rescued
+                  + REPAIR_W * repaired + BUILD_W * spent + WALL_W * base_walls
+                  + BLOCK_PLACE_W * placed * pointless + BLOCK_WALL_W * walled + BLOCK_SAVE_W * saves + BLOCK_STOP_W * block_stops)
         live = alive0.view(B, 2, self.N)
         team_mean = (reward.view(B, 2, self.N) * live).sum(-1) / live.sum(-1).clamp(min=1)
         reward = (1 - TEAM_SPIRIT) * reward + TEAM_SPIRIT * team_mean[:, self.team]
@@ -479,7 +503,7 @@ class Arena:
         for k, v in dict(shots=shoot.sum() + big.sum() + launch.sum(), misses=misses, kills=kills, deaths=died,
                          assists=assists, base_kills=base_kills, base_damage=base_dmg, bases_lost=bases_lost,
                          defend_hits=defend > 0, heals=healed > 0, rescues=rescued, pickups=picked, deposits=deposited,
-                         builds=built, repairs=repaired, base_walls=base_walls, blocks_placed=placed, wall_blocks=walled,
+                         builds=built, repairs=repaired > 0, base_walls=base_walls, blocks_placed=placed, wall_blocks=walled,
                          block_saves=saves, block_stops=block_stops, grouped=fighter & (second <= FORM_MAX), idle=idle,
                          stacked=overlap > 0, games=done, decisive=done & ~by_count & (winner >= 0),
                          turns=self.t * done).items():
@@ -528,7 +552,7 @@ class Arena:
         self.block_owner.scatter_(1, put, torch.arange(self.A, device=self.device, dtype=torch.int16).expand(self.B, -1))
         return ok.float(), (ok & adjacent).float(), counts + ok.view(self.B, 2, self.N).sum(-1)
 
-    def _bullets(self, alive0, intruding):
+    def _bullets(self, alive0, intruding, attackers):
         """Advance every bullet one step, test the whole swept segment against every
         agent but the shooter (friendly fire is on), and credit damage, kills and misses
         -- split into enemy and friendly -- to the agent that fired it."""
@@ -571,8 +595,10 @@ class Arena:
         self.b_pos, self.b_life = new, self.b_life - 1
         self.b_alive &= ~hit & ~chip & ~wall & ~out & (self.b_life > 0)
         s = lambda x: x.sum(-1).float()
-        return (s(dmg * ~friendly), s(dmg * (foe & base_hit)), s(dmg * friendly), s(killed & foe & ~base_hit),
-                s(killed & foe & base_hit), s(killed & friendly), s(gone), saves, s(dmg * (foe & per_target(intruding))))
+        on_base = dmg * (foe & base_hit)
+        return (s(dmg * ~friendly), s(on_base), s(dmg * friendly), s(killed & foe & ~base_hit),
+                s(killed & foe & base_hit), s(killed & friendly), s(gone), saves, s(dmg * (foe & per_target(intruding))),
+                s(on_base * (per_target(attackers) - 1).clamp(0, 4)))
 
     def _pickup(self, alive0):
         scout = alive0 & (self.role == SCOUT) & (self.supply < self.carry)
@@ -585,6 +611,7 @@ class Arena:
         won = can & (mind <= best.gather(1, h))
         taken = torch.zeros(self.B, self.H, device=self.device).scatter_add(1, h, won.float()) > 0
         self.supply += won.float()
+        self.last_useful = torch.where(won, self.t.view(-1, 1).float(), self.last_useful)
         self.heart_alive &= ~taken
         self.heart_timer = torch.where(taken, float(HEART_RESPAWN), self.heart_timer)
         return won.float()
@@ -606,6 +633,7 @@ class Arena:
         given = torch.where(heal, (self.max_hp - self.hp).gather(1, who).clamp(max=HEAL_AMOUNT), torch.zeros_like(self.hp))
         self.hp = (self.hp + torch.zeros_like(self.hp).scatter_add(1, who, given)).minimum(self.max_hp)
         self.supply -= heal.float()
+        self.last_useful = torch.where(heal | unload, self.t.view(-1, 1).float(), self.last_useful)
         self.special_cd = torch.where(heal | unload, float(HEAL_CD), self.special_cd)
         return amount, given, rescued
 
@@ -620,7 +648,9 @@ class Arena:
         repair = ready & (order == 1) & (self.supply >= 1)
         near = torch.cdist(self.pos, self.pos) < DEPOSIT_RADIUS
         boost = (repair[:, :, None] & near & self.same).any(1) & (self.hp > 0) & (self.role != BASE)
+        hp0 = self.hp
         self.hp = torch.where(repair, self.hp + REPAIR_SELF, torch.where(boost, self.hp + REPAIR_NEAR, self.hp)).minimum(self.max_hp)
+        restored = (self.hp - hp0) * repair                      # what the repair actually put back on the base
         self.supply -= repair.float()
 
         kind = (order - 2).clamp(0, 2)                          # 0 scout, 1 soldier, 2 heavy
@@ -657,7 +687,7 @@ class Arena:
         wall = wall & (raised > 0)                               # nothing placed, nothing paid
         self.supply = self.supply - wall * WALL_COST
         self.special_cd = torch.where(repair | (built > 0) | wall, float(ORDER_CD), self.special_cd)
-        return built, spent, repair.float(), raised
+        return built, spent, restored, raised
 
     # ---- scripted benchmark ---------------------------------------------------
     def raider(self):
