@@ -62,7 +62,7 @@ PICK_RADIUS, HEAL_RADIUS, HEAL_AMOUNT, HEAL_CD = 2., 4., 2., 4   # a scout moves
 DEPOSIT_RADIUS = BASE_CLEAR + 3
 ORDERS = ('none', 'repair', 'build scout', 'build soldier', 'build heavy', 'build wall')
 BUILD_COST = torch.tensor([2., 5., 10.])  # scout, soldier, heavy
-REPAIR_SELF, REPAIR_NEAR, ORDER_CD = 10., 2., 5
+REPAIR_SELF, REPAIR_NEAR, ORDER_CD = 5., 2., 8    # (10 hp every 5 turns out-healed any siege: no base ever fell)
 
 # ---- reward --------------------------------------------------------------------
 # individual credit: the agent that lands the kill, wastes the shot or dies feels it
@@ -74,7 +74,7 @@ KILL_W, BASE_KILL_W, DAMAGE_W = 1., 3., .2
 BLIND_SHOT_W, MISS_W = -.1, -.05
 # bases: extra per damage to an enemy base, and more again for every allied tank (beyond
 # the first, up to four) also at that base -- mass on one target instead of trickling in
-BASE_DAMAGE_W, SIEGE_W = .1, .1
+BASE_DAMAGE_W, SIEGE_W = .2, .2
 DEATH_W, BASE_DEATH_W = -1., -8.
 FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.2, -2.   # friendly fire is on: a hit costs what an enemy hit earns, a kill a lot more
 # bases: losing hurts more than winning pays (each living teammate -4 per base lost, +2
@@ -104,7 +104,7 @@ COMRADE_NEAR, COMRADE_DEATH_W, COMMANDER_DEATH_W = 25., -.05, -.15
 IDLE_TURNS, IDLE_W = 60, -.015
 # ...and a soldier or heavy is drawn toward the nearest enemy (tank or base) the way a
 # scout is drawn toward hearts: potential-based, so it nets to zero and can't be farmed
-ENEMY_PULL, ENEMY_REACH = .3, 100.
+ENEMY_PULL, ENEMY_REACH = 1., 250.        # felt from across the board, not just the last hundred tiles
 # economy: a scout is paid for fetching hearts and for bringing them home, with a pull
 # toward the nearest heart while it has room and toward the nearest base while carrying
 # (potential-based: each nets to zero over the trip, so it guides without changing what's

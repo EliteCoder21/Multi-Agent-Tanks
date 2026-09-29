@@ -149,6 +149,12 @@ heavies (the device that got scouts to hearts, and just as unfarmable), a clock 
 pays a timeout winner almost nothing and costs a tie both sides, and team spirit
 capped at 0.5.
 
+**Unkillable bases.** Even with the pull, not one game in a thousand ended before the
+clock. The reason was arithmetic: a base repaired 10 hp per heart every 5 turns,
+and with the economy running that out-healed any siege four soldiers could mount.
+Repair is 5 hp on an 8-turn order cooldown now, base damage and massed sieges pay
+double, and the enemy pull reaches across the whole board.
+
 ## Speed, again
 
 With the map and the GRU, an iteration had grown to 15 s, 11 s of it the PPO update.

@@ -62,8 +62,8 @@ tie). Losing every tank doesn't end the game — a base with supplies can build 
 | base | 5 | 40 | stationary | long-range missile (5× a tank's reach), sees 5× farther, spends stored hearts |
 
 **Hearts** are the only resource. They lie scattered around the map, only scouts can
-carry them, and a base spends them on one of four orders: **repair** (itself and
-every tank next to it, 1 heart), **build** a scout / soldier / heavy (2 / 5 / 10
+carry them, and a base spends them on one of four orders: **repair** (5 hp to itself and
+2 to every tank next to it, 1 heart, one order every 8 turns), **build** a scout / soldier / heavy (2 / 5 / 10
 hearts), or **raise a wall** — a row of 5 blocks, 14 tiles out in the direction the
 base's turret is pointing (1 heart).
 
@@ -209,8 +209,8 @@ soldiers learned to live off the scouts' deliveries).
 
 **Bases.** Losing has to hurt more than winning pays, or teams happily trade bases:
 
-- attacking: +3 to the tank that destroys a base, +0.1 extra per damage to a base —
-  and **+0.1 more per allied tank also at that base** (beyond the first, up to four),
+- attacking: +3 to the tank that destroys a base, +0.2 extra per damage to a base —
+  and **+0.2 more per allied tank also at that base** (beyond the first, up to four),
   so a massed siege on one target beats trickling in; +2 to every member of the team
   that takes it;
 - defending: −4 to every member per base lost (−8 to the base itself), and damage
