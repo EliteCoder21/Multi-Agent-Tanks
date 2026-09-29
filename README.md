@@ -162,10 +162,12 @@ This is where most of the work went. Each term is there because, without it,
 self-play found something degenerate instead — [docs/HISTORY.md](docs/HISTORY.md)
 tells those stories. All the weights are named constants near the top of `arena.py`.
 
-**Individual credit.** +1 per kill, +0.2 per damage dealt, −1 for dying. **Every
-shot costs**: −0.02 to fire a bullet, −0.06 a missile, and −0.08 more for a bullet
-that hits nothing — so spraying is a steady loss and only aimed fire pays. Hitting a
-teammate costs what hitting an enemy earns (−0.2 per damage), killing one −2.
+**Individual credit.** +1 per kill, +0.2 per damage dealt, −0.03 per shot that hits
+nothing, −1 for dying. A **blind shot** — fired with no enemy in the shooter's forward
+cone and range — costs −0.1, so spraying at nothing is a loss; a shot at a visible
+enemy is never charged beyond the miss, because charging every shot taught fresh
+policies to stop shooting before they could aim. Hitting a teammate costs what
+hitting an enemy earns (−0.2 per damage), killing one −2.
 
 **Team spirit.** Every agent's reward is blended **half-and-half** with its team's
 average, so helping the team pays as much as helping yourself (the trick OpenAI Five

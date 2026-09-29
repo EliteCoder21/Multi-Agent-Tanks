@@ -282,7 +282,7 @@ def summarize(env, d, losses):
     per_k = 1000 / max(alive.sum().item(), 1)              # counts are per 1000 alive agent-steps
     ratio = lambda a, b: s[a] / max(s[b], 1)
     log = {f'{k}_per_1k': s[k] * per_k for k in (
-        'shots', 'kills', 'deaths', 'assists', 'base_kills', 'base_damage', 'bases_lost', 'defend_hits', 'heals',
+        'shots', 'blind_shots', 'kills', 'deaths', 'assists', 'base_kills', 'base_damage', 'bases_lost', 'defend_hits', 'heals',
         'rescues', 'pickups', 'deposits', 'builds', 'repairs', 'base_walls', 'blocks_placed', 'block_saves',
         'block_stops', 'stacked')}
     log.update({
@@ -303,7 +303,7 @@ def summarize(env, d, losses):
     return log
 
 
-SHOWN = {'moving': 'moving_fraction', 'acc': 'accuracy', 'kills': 'kills_per_1k', 'assists': 'assists_per_1k',
+SHOWN = {'moving': 'moving_fraction', 'shots': 'shots_per_1k', 'blind': 'blind_shots_per_1k', 'acc': 'accuracy', 'kills': 'kills_per_1k', 'assists': 'assists_per_1k',
          'basedmg': 'base_damage_per_1k', 'defend': 'defend_hits_per_1k', 'grouped': 'grouped_fraction',
          'idle': 'idle_fraction', 'ff': 'friendly_hit_fraction', 'deposits': 'deposits_per_1k', 'builds': 'builds_per_1k',
          'rescues': 'rescues_per_1k', 'blocks': 'blocks_placed_per_1k', 'walls': 'wall_block_fraction',

@@ -66,9 +66,10 @@ REPAIR_SELF, REPAIR_NEAR, ORDER_CD = 10., 2., 5
 # ---- reward --------------------------------------------------------------------
 # individual credit: the agent that lands the kill, wastes the shot or dies feels it
 KILL_W, BASE_KILL_W, DAMAGE_W = 1., 3., .2
-# every shot costs a little and a wasted one a lot more, so spraying is a loss and only
-# aimed fire pays (a bullet that hits nothing: -.1; one that lands: +.2 per damage)
-SHOT_W, MISSILE_W, MISS_W = -.02, -.06, -.08
+# a blind shot -- fired with no enemy in the shooter's forward cone and range -- costs;
+# a shot at a visible enemy never does, even if it misses much (charging every shot
+# taught fresh policies to stop shooting before they could aim)
+BLIND_SHOT_W, MISS_W = -.1, -.03
 # bases: extra per damage to an enemy base, and more again for every allied tank (beyond
 # the first, up to four) also at that base -- mass on one target instead of trickling in
 BASE_DAMAGE_W, SIEGE_W = .1, .1
@@ -214,7 +215,7 @@ class Arena:
         self.t = torch.zeros(B, dtype=torch.long, device=d)
         self.winner = torch.full((B,), -1, dtype=torch.long, device=d)
         self.stats = {k: torch.zeros((), device=d) for k in (
-            'shots', 'hits', 'friendly_hits', 'misses', 'kills', 'deaths', 'assists', 'base_kills', 'base_damage',
+            'shots', 'blind_shots', 'hits', 'friendly_hits', 'misses', 'kills', 'deaths', 'assists', 'base_kills', 'base_damage',
             'bases_lost', 'defend_hits', 'heals', 'rescues', 'pickups', 'deposits', 'builds', 'repairs', 'base_walls',
             'blocks_placed', 'wall_blocks', 'block_saves', 'block_stops', 'grouped', 'idle', 'stacked',
             'games', 'decisive', 'turns')}
@@ -432,6 +433,10 @@ class Arena:
         counts = self._block_counts()
         placed, walled, counts = self._put_blocks(alive0 & ~is_b & (place > .5) & (self.block_cd == 0), self.pos + u * BLOCK_REACH, counts)
         self.block_cd = torch.where(placed > 0, float(BLOCK_CD), self.block_cd)
+        dd = torch.cdist(self.pos, self.pos)
+        delta = self.pos[:, None] - self.pos[:, :, None]
+        rel = wrap(torch.atan2(delta[..., 1], delta[..., 0]) - self.heading[..., None])
+        blind = ~(alive0[:, None] & ~self.same & (rel.abs() < VISION_SPAN) & (dd < (VISION_RANGE * self.sight)[..., None])).any(-1)
         can_fire = alive0 & (fire > .5) & (self.gun_cd == 0)
         shoot = self._spawn(can_fire & ((role == SOLDIER) | (role == COMMANDER)), u, BULLET_SPEED, BULLET_LIFE, 1., False)
         big = self._spawn(can_fire & is_b, u, BASE_MISSILE_SPEED, BASE_MISSILE_LIFE, 2., True)
@@ -443,6 +448,7 @@ class Arena:
         built, spent, repaired, base_walls = self._base_orders(alive0, order, u, counts)
         dealt, base_dmg, friendly_dmg, kills, base_kills, friendly_kills, misses, saves, defend, siege = self._bullets(alive0, intruding, attackers)
         died = alive0 & (self.hp <= 0)
+        blind_shots = ((shoot | launch | big) & blind).float()
         respawn = ~self.heart_alive & (self.heart_timer == 0)
         fresh = self.spawn_pool.gather(1, (self._rand(B, self.H) * SPAWN_POOL).long().unsqueeze(-1).expand(-1, -1, 2))
         self.heart_pos = torch.where(respawn.unsqueeze(-1), fresh, self.heart_pos)
@@ -453,7 +459,6 @@ class Arena:
         bases_lost = (died & is_b).view(B, 2, self.N).sum(-1).float()
         tank = (self.hp > 0) & ~is_b
         fighter = tank & (role != SCOUT)
-        dd = torch.cdist(self.pos, self.pos)
         gap = dd.masked_fill(~(tank[:, None] & tank[:, :, None]) | self.eye, FAR)     # between living tanks
         overlap = (1 - gap.amin(-1)).clamp(min=0) * tank
         second = gap.masked_fill(~self.same, FAR).topk(2, -1, largest=False).values[..., 1]
@@ -469,7 +474,7 @@ class Arena:
         pull, self.phi = phi - self.phi, phi
 
         reward = (KILL_W * kills + BASE_KILL_W * base_kills + DAMAGE_W * dealt + BASE_DAMAGE_W * base_dmg + SIEGE_W * siege
-                  + SHOT_W * shoot + MISSILE_W * (launch | big) + MISS_W * misses
+                  + BLIND_SHOT_W * blind_shots + MISS_W * misses
                   + FRIENDLY_DAMAGE_W * friendly_dmg + FRIENDLY_KILL_W * friendly_kills
                   + torch.where(is_b, BASE_DEATH_W, DEATH_W) * died
                   + BASE_LOST_W * bases_lost[:, self.team] + BASE_WON_W * bases_lost[:, 1 - self.team] + DEFEND_W * defend
@@ -500,7 +505,7 @@ class Arena:
         terminal = alive0 & (died | done.unsqueeze(1))
         self.winner = winner
 
-        for k, v in dict(shots=shoot.sum() + big.sum() + launch.sum(), misses=misses, kills=kills, deaths=died,
+        for k, v in dict(shots=shoot.sum() + big.sum() + launch.sum(), blind_shots=blind_shots, misses=misses, kills=kills, deaths=died,
                          assists=assists, base_kills=base_kills, base_damage=base_dmg, bases_lost=bases_lost,
                          defend_hits=defend > 0, heals=healed > 0, rescues=rescued, pickups=picked, deposits=deposited,
                          builds=built, repairs=repaired > 0, base_walls=base_walls, blocks_placed=placed, wall_blocks=walled,
