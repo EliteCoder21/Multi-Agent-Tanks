@@ -48,6 +48,7 @@ THROTTLE = torch.tensor([-.5, 0., 1.])
 STEER = torch.tensor([-1., 0., 1.])
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+torch._dynamo.config.cache_size_limit = 64          # one static graph per arena shape (dynamic shapes mis-specialised a stride)
 # entropy bonus per head (move, fire, special, base order, place block). The block head
 # once got extra (.05) to stop it collapsing to "never" under a placement cost; with
 # placing free near fights that extra just held it at random, so it is back to normal
@@ -370,9 +371,9 @@ def train(arenas, steps=32, minutes=None, output='tank_policy.pt', seed=1, logdi
     dev = 'cuda'
     torch.manual_seed(seed)
     policy, it = load(output, dev) if resume and os.path.exists(output) else (Policy().to(dev), 0)
-    net = torch.compile(policy)                                 # fused encoder/map/GRU kernels, same weights
+    net = torch.compile(policy, dynamic=False)                  # fused encoder/map/GRU kernels, same weights
     past = copy.deepcopy(policy)                                # the frozen snapshot the non-learning side plays
-    past_net, pool = torch.compile(past), []
+    past_net, pool = torch.compile(past, dynamic=False), []
     opt = torch.optim.Adam(policy.parameters(), lr=LR, eps=1e-5)
     runs = [Runner(name, ARENAS[name], policy, seed + i) for i, name in enumerate(arenas)]
     eval_env = Arena(batch=128, device=dev, seed=seed + 99, auto_reset=False, grid=560)
