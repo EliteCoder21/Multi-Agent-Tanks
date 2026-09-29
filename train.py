@@ -8,7 +8,8 @@ ago; it is reset when an agent dies or its game ends.
 Team map ("the radio"): each team keeps a 32 x 32 grid of 24-number vectors laid over
 the board -- one vector per sector, whatever the board's size. Every turn each living
 agent *writes* to the vector of the sector it stands in and *reads* the 5 x 5 sectors
-round it plus the whole map pooled down to 8 x 8 -- its picture of the entire board --
+round it plus the whole map max-pooled down to 8 x 8 (max, so a single report in an
+otherwise empty region isn't averaged away) -- its picture of the entire board --
 digested by a small layer into 256 numbers before it meets the GRU (fed raw, the
 2136-number read outweighed the agent's own senses four to one, and a team did better
 with its map switched off). 8 of the 24 numbers are a *sighting report* taken
@@ -117,7 +118,7 @@ class Policy(nn.Module):
         win = (cell.unsqueeze(2) + self.offsets).clamp(0, S - 1)                  # (B, A, K*K, 2)
         idx = (team * S * S).view(1, A, 1) + win[..., 0] * S + win[..., 1]
         local = Mf.gather(1, idx.flatten(1).unsqueeze(-1).expand(-1, -1, C)).view(B, A, -1)
-        pooled = F.avg_pool2d(M.permute(0, 1, 4, 2, 3).reshape(B * 2, C, S, S), S // self.coarse)
+        pooled = F.max_pool2d(M.permute(0, 1, 4, 2, 3).reshape(B * 2, C, S, S), S // self.coarse)   # max, not mean: one report in an empty region survives
         return torch.cat((local, pooled.reshape(B, 2, -1)[:, team]), -1)
 
     def update(self, Mf, cell, team, gate, value, using):

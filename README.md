@@ -108,8 +108,10 @@ observation ─► encoder (2 × 512) ─► [encoded observation, digested read
   and an 1125-tile war — and every sector holds a 24-number vector. Every turn each
   living unit **writes** to the vector of the sector it is standing in (a gated
   update: it decides how much to overwrite and with what), and **reads** the 5 × 5
-  sectors around it plus the whole board pooled down to 8 × 8 — its picture of the
-  entire war, not just its corner of it — squeezed by a small layer into 256 numbers
+  sectors around it plus the whole board max-pooled down to 8 × 8 (max rather than
+  mean, so one report in an otherwise empty region isn't averaged away) — its
+  picture of the entire war, not just its corner of it — squeezed by a small layer
+  into 256 numbers
   before it joins the agent's own senses (fed raw, the read was four times wider than
   the encoded observation and drowned it: a team did better with its map switched off).
   Eight of the 24 numbers are a **sighting report** taken straight from the writer's
