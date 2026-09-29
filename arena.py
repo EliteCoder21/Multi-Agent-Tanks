@@ -66,9 +66,10 @@ REPAIR_SELF, REPAIR_NEAR, ORDER_CD = 10., 2., 5
 # ---- reward --------------------------------------------------------------------
 # individual credit: the agent that lands the kill, wastes the shot or dies feels it
 KILL_W, BASE_KILL_W, DAMAGE_W = 1., 3., .2
-# a blind shot -- fired with no enemy in the shooter's forward cone and range -- costs;
-# a shot at a visible enemy never does, even if it misses much (charging every shot
-# taught fresh policies to stop shooting before they could aim)
+# a blind shot -- fired with no enemy anywhere within the shooter's radar range -- costs;
+# a shot with an enemy about never does beyond the miss, even if it's badly aimed
+# (charging every shot, or every shot without an enemy dead ahead, taught fresh
+# policies to stop shooting before they could aim)
 BLIND_SHOT_W, MISS_W = -.1, -.03
 # bases: extra per damage to an enemy base, and more again for every allied tank (beyond
 # the first, up to four) also at that base -- mass on one target instead of trickling in
@@ -434,9 +435,7 @@ class Arena:
         placed, walled, counts = self._put_blocks(alive0 & ~is_b & (place > .5) & (self.block_cd == 0), self.pos + u * BLOCK_REACH, counts)
         self.block_cd = torch.where(placed > 0, float(BLOCK_CD), self.block_cd)
         dd = torch.cdist(self.pos, self.pos)
-        delta = self.pos[:, None] - self.pos[:, :, None]
-        rel = wrap(torch.atan2(delta[..., 1], delta[..., 0]) - self.heading[..., None])
-        blind = ~(alive0[:, None] & ~self.same & (rel.abs() < VISION_SPAN) & (dd < (VISION_RANGE * self.sight)[..., None])).any(-1)
+        blind = ~(alive0[:, None] & ~self.same & (dd < (RADAR_RANGE * self.sight)[..., None])).any(-1)   # nobody to shoot at
         can_fire = alive0 & (fire > .5) & (self.gun_cd == 0)
         shoot = self._spawn(can_fire & ((role == SOLDIER) | (role == COMMANDER)), u, BULLET_SPEED, BULLET_LIFE, 1., False)
         big = self._spawn(can_fire & is_b, u, BASE_MISSILE_SPEED, BASE_MISSILE_LIFE, 2., True)

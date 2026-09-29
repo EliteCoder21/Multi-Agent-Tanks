@@ -125,8 +125,11 @@ terrain styles, so what it learns has to be about tanks and terrain in general.
 wasted shots penalised, and lightly (−0.03), tanks fired constantly. Charging every
 shot (−0.02) and every miss (−0.08) fixed the spraying and broke learning: at 5 %
 accuracy a shot has negative expected value, so within 30 iterations the policy fired
-a tenth as often and never learned to aim. What works is charging only *blind* shots
-— fired with no enemy in the forward cone — so aiming at something is always allowed.
+a tenth as often and never learned to aim. Charging only shots with no enemy in the
+forward cone was gentler but still slowed combat learning threefold from scratch: a
+fresh policy can't yet tell "dead ahead" from "nearby", so it learns to hold fire.
+What works is charging only shots with no enemy anywhere in radar range — shooting
+at nothing — and leaving every shot near a fight to the small miss penalty.
 
 **Economy rewards need a floor, not just a ceiling.** After the farming episode the
 economy rewards were cut so far that scouts stopped bothering: a few deliveries a
