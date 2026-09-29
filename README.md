@@ -37,6 +37,7 @@ weights automatically whenever `train.py` saves new ones.
 | `viewer.py` | live pygame viewer: a top-down overview with the team map overlaid, and a first-person mode to play a tank yourself |
 | `report/collect.py` | gathers every number a write-up needs from a finished run |
 | `docs/HISTORY.md` | how the design got here: what was tried, what failed, and why |
+| `docs/SURVEY.md` | how other multi-agent systems plan at scale, and what this project borrows |
 
 ---
 
@@ -95,12 +96,15 @@ One network is shared by every agent on both teams; agents are told apart only b
 what they observe.
 
 ```
-                                    team map (32 × 32 sectors × 24 numbers, one per team)
-                                          ▲ write (gated)          │ read: 5 × 5 sectors round me
-                                          │                        │       + the whole map pooled to 8 × 8
-                                          │                        ▼
-                                          │                   digest (256)
-observation ─► encoder (2 × 512) ─► [encoded observation, digested read] ─► GRU memory (512) ─► 5 action heads + value
+                team map, one per team: 32 × 32 sectors × (24 sightings + 8 orders)
+                     ▲ write my sector (gated)   ▲ orders over the whole board (bases only)
+                     │                          │                    │ read: 5 × 5 sectors round me
+                     │                          │                    │       + the whole map pooled to 8 × 8
+                     │                          │                    ▼
+                     │                          │               digest (256)
+observation ─► encoder (2 × 512) ─► [encoded observation, digested read] ─► GRU memory (512) ─► 5 action heads
+                                                                                  │
+                                              both teams' maps pooled ─► overview ─┴─► value (critic, training only)
 ```
 
 - **The team map.** Each team keeps a grid of **32 × 32 sectors** laid over the
@@ -123,6 +127,18 @@ observation ─► encoder (2 × 512) ─► [encoded observation, digested read
   replaced a radio in which every agent broadcast to everyone at once; a spatial
   map is what a war room actually needs — *where* things are — and it is the only
   channel between teammates.
+- **Orders from the bases.** Bases are the natural commanders: stationary, seeing
+  five times farther, holding the economy. Every turn each base writes a **plan over
+  the whole board** — an 8 × 8 grid of 8-number orders, gated, laid over the map's
+  sectors as a separate orders layer — and every unit reads the orders for its own
+  sector and the pooled plan alongside the sightings. Nobody is told what an order
+  means: the bases' output and the units' response are trained together, and a
+  base's plan gets gradient from every unit that acted on it. It is the manager /
+  worker split of Feudal networks with the goal space made spatial and shared.
+- **A centralised critic.** The value head (used only in training) sees, besides the
+  agent's own state, *both* teams' maps pooled over the board — the MAPPO idea that
+  most of the credit-assignment problem in a team game is a critic that can't see
+  what the rest of the team is doing.
 - **Memory.** A GRU lets an agent remember recent turns: an enemy that went behind
   a wall, which way the squad was heading. It is wiped when an agent dies or its
   game ends.
@@ -137,14 +153,19 @@ observation ─► encoder (2 × 512) ─► [encoded observation, digested read
   `(games, agents, …)` tensor, and `torch.compile` fuses the sensors and physics
   into a handful of GPU kernels. Games reset independently, so training is a
   continuous stream of 32-turn rollouts.
-- **Three board sizes, four terrains.** Iterations take turns on a small board
-  (400 tiles, 14 tanks and 3 bases a side, 1536 games), the medium one (560, 28, 5,
-  1024 games) and a large one (800, 40, 7, 512 games), each game on one of sixteen
-  maps in the four terrain styles — so the policy has to work at every scale and
-  in every kind of terrain, not memorise one arena.
+- **Three board sizes, four terrains, as a curriculum.** Training starts on the
+  small board alone (400 tiles, 14 tanks and 3 bases a side, 1024 games — the
+  cheapest iteration, where fights are learned fastest), adds the medium board
+  (560, 28, 5, 768 games) at iteration 300 and the large one (800, 40, 7, 384 games)
+  at 900, then rotates through all three; each game is on one of sixteen maps in
+  the four terrain styles. The policy has to work at every scale and in every kind
+  of terrain, not memorise one arena.
+- **Team spirit is annealed** from 0.3 to 0.7 over the first 1 500 iterations, the
+  way OpenAI Five did it: individual reward learns to fight fastest, team reward
+  buys the plays that cost the individual.
 - **Recurrent PPO.** The update replays each game's rollout in order through the
   GRU *and the team map* (backpropagation through time), starting from the memory
-  the rollout began with. Minibatches are 32 whole games, 3 epochs per iteration, in
+  the rollout began with. Minibatches are 64 whole games, 2 epochs per iteration, in
   bf16.
 - **Opponents.** Both sides of most games are the current policy. In a quarter of
   the games one side is played by someone else — half by a frozen **past snapshot**
@@ -161,7 +182,9 @@ python train.py --resume                 # continue from tank_policy.pt
 python train.py --arenas medium,large    # a subset of the board sizes
 ```
 
-The training log prints one line per iteration; `moving` (the share of tank turns
+An iteration takes about 6 s on the small board and 10–12 s on the medium one (the
+PPO update is the larger half: a 3.9 M-parameter recurrent policy replayed over 32
+turns for every agent of every game). The training log prints one line per iteration; `moving` (the share of tank turns
 that aren't "stand still") is the first number because a policy that stops moving is
 the most common way a reward change goes wrong.
 
@@ -179,9 +202,9 @@ every shot (or every shot without an enemy dead ahead) taught fresh policies to 
 shooting before they could aim. Hitting a teammate costs what
 hitting an enemy earns (−0.2 per damage), killing one −2.
 
-**Team spirit.** Every agent's reward is blended **half-and-half** with its team's
-average, so helping the team pays as much as helping yourself (the trick OpenAI Five
-used, turned up).
+**Team spirit.** Every agent's reward is blended with its team's average — 30 % at
+the start of training, rising to 70 % — so helping the team pays even when someone
+else gets the credit (OpenAI Five's trick, including the annealing).
 
 **Bases.** Losing has to hurt more than winning pays, or teams happily trade bases:
 

@@ -52,31 +52,42 @@ torch.backends.cudnn.allow_tf32 = True
 # once got extra (.05) to stop it collapsing to "never" under a placement cost; with
 # placing free near fights that extra just held it at random, so it is back to normal
 ENTROPY = torch.tensor([.01, .01, .01, .01, .01])
-# the arenas trained on, round-robin: board side, tanks and bases per side, parallel games
-ARENAS = {'small': dict(grid=400, tanks=14, bases=3, games=1536),
-          'medium': dict(grid=560, tanks=28, bases=5, games=1024),
-          'large': dict(grid=800, tanks=40, bases=7, games=512)}
+# the arenas trained on: board side, tanks and bases per side, parallel games, and the
+# iteration each joins the rotation -- a curriculum: fights are learned fastest on the
+# small board (an iteration there is cheapest), then the bigger boards teach the rest
+ARENAS = {'small': dict(grid=400, tanks=14, bases=3, games=1024, start=0),
+          'medium': dict(grid=560, tanks=28, bases=5, games=768, start=300),
+          'large': dict(grid=800, tanks=40, bases=7, games=384, start=900)}
+# team spirit: how much of each agent's reward is its team's average, annealed the way
+# OpenAI Five did it -- individual reward learns fights fastest, team reward buys plans
+SPIRIT_FROM, SPIRIT_TO, SPIRIT_ITERS = .3, .7, 1500
 
 
 class Policy(nn.Module):
-    def __init__(self, hidden=512, cells=32, chan=24, window=5, coarse=8, digest=256, decay=.99):
+    def __init__(self, hidden=512, cells=32, chan=24, orders=8, window=5, coarse=8, digest=256, decay=.99):
         super().__init__()
-        self.hidden, self.cells, self.chan, self.window, self.coarse, self.decay = hidden, cells, chan, window, coarse, decay
+        self.hidden, self.cells, self.chan, self.orders = hidden, cells, chan, orders
+        self.window, self.coarse, self.decay = window, coarse, decay
         self.enc = nn.Sequential(nn.Linear(OBS, hidden), nn.ReLU(), nn.Linear(hidden, hidden), nn.ReLU())
-        self.digest = nn.Sequential(nn.Linear((window * window + coarse * coarse) * chan, digest), nn.ReLU())
+        self.digest = nn.Sequential(nn.Linear((window * window + coarse * coarse) * (chan + orders), digest), nn.ReLU())
         self.rnn = nn.GRUCell(hidden + digest, hidden)
         self.write = nn.Linear(hidden, 2 * (chan - FACTS))      # gate and value of the learned part of a write
+        self.command = nn.Linear(hidden, 1 + coarse * coarse * orders)   # a base's plan: gate + an 8 x 8 grid of orders
         self.pi = nn.Linear(hidden, sum(HEADS))
-        self.v = nn.Linear(hidden, 1)
+        # the critic is centralised (MAPPO-style): besides the agent's own state it sees both
+        # teams' maps pooled over the whole board -- privileged during training, unused in play
+        self.overview = nn.Sequential(nn.Linear(2 * coarse * coarse * (chan + orders), 128), nn.ReLU())
+        self.v = nn.Linear(hidden + 128, 1)
         r = torch.arange(window) - window // 2
         self.register_buffer('offsets', torch.stack(torch.meshgrid(r, r, indexing='ij'), -1).view(-1, 2))
         with torch.no_grad():            # place-block head starts near "never", or a fresh policy carpets the board
             self.pi.bias[-2:] = torch.tensor([3., -3.])
 
     def memory(self, obs):
-        """A blank memory for these games: GRU state per agent, and one map per team."""
+        """A blank memory for these games: GRU state per agent, and one map per team --
+        the sightings channels, plus the orders layer the team's bases write."""
         B, A = obs.shape[:2]
-        return obs.new_zeros(B, A, self.hidden), obs.new_zeros(B, 2, self.cells, self.cells, self.chan)
+        return obs.new_zeros(B, A, self.hidden), obs.new_zeros(B, 2, self.cells, self.cells, self.chan + self.orders)
 
     def forward(self, obs, alive, state, mute=None):
         """obs (B, A, OBS), alive (B, A), state (h, map) -> logits, value, new state.
@@ -84,21 +95,43 @@ class Policy(nn.Module):
         neither read nor write) -- used to test whether the map matters."""
         h, M = state
         B, A = obs.shape[:2]
-        S, C = self.cells, self.chan
+        S, C, O = self.cells, self.chan, self.orders
         using = alive if mute is None else alive & ~mute
         team = torch.arange(A, device=obs.device) // (A // 2)                    # agents per team: team 0 first
-        Mf = M.view(B, 2 * S * S, C)
+        Mf = M.view(B, 2 * S * S, C + O)
         cell = (obs[..., POS] * S).long().clamp(0, S - 1)                        # (B, A, 2): the sector I stand in
         with torch.autocast('cuda', torch.bfloat16, enabled=obs.is_cuda):        # ~2x faster on the GPU
             x = self.enc(obs)
-            read = self.digest(self.read(Mf, M, cell, team).to(x.dtype)) * using.unsqueeze(-1)
+            local, pooled = self.read(Mf, M, cell, team)
+            read = self.digest(torch.cat((local, pooled[:, team]), -1).to(x.dtype)) * using.unsqueeze(-1)
             h = self.rnn(torch.cat((x, read), -1).flatten(0, 1),
                          (h * alive.unsqueeze(-1)).flatten(0, 1)).view(B, A, -1).float()
             gate, value = self.write(h).float().chunk(2, -1)
+            plan = self.command(h).float()
+            both = self.overview(pooled.flatten(1).to(x.dtype)).float()          # both teams' maps: the critic's overview
         gate = torch.cat((torch.ones_like(obs[..., :FACTS]), torch.sigmoid(gate)), -1) * using.unsqueeze(-1)
         value = torch.cat((self.facts(obs), torch.tanh(value)), -1)
-        M = self.update(Mf, cell, team, gate, value, using).view_as(M)
-        return self.pi(h).float(), self.v(h).squeeze(-1).float(), (h, M)
+        sightings = self.update(Mf[..., :C], cell, team, gate, value, using)
+        orders = self.orders_layer(M[..., C:], plan, team, using & (obs[..., 3] > .5))
+        M = torch.cat((sightings.view(B, 2, S, S, C), orders), -1)
+        v = self.v(torch.cat((h, both.unsqueeze(1).expand(-1, A, -1)), -1)).squeeze(-1)
+        return self.pi(h).float(), v, (h, M)
+
+    def orders_layer(self, Ord, plan, team, commanding):
+        """The bases write the plan: each commanding base outputs a coarse x coarse grid
+        of `orders`-number vectors over the whole board and a gate; the team's orders
+        layer moves toward the mean of its bases' plans by their mean gate, and fades."""
+        B, A = plan.shape[:2]
+        S, O, K = self.cells, self.orders, self.coarse
+        g = torch.sigmoid(plan[..., :1]) * commanding.unsqueeze(-1)              # (B, A, 1)
+        p = torch.tanh(plan[..., 1:]).view(B, A, K, K, O)
+        idx = team.view(1, A, 1, 1, 1).expand(B, A, K, K, O)
+        add = lambda x: torch.zeros(B, 2, K, K, O, device=plan.device).scatter_add(1, idx[..., :x.shape[-1]], x)
+        n = add(commanding.float().view(B, A, 1, 1, 1).expand(B, A, K, K, 1))
+        gs, gp = add(g.view(B, A, 1, 1, 1).expand(B, A, K, K, O)), add(g.view(B, A, 1, 1, 1) * p)
+        coarse = Ord[:, :, ::S // K, ::S // K] * self.decay                      # the plan lives at coarse resolution
+        coarse = coarse + gs / n.clamp(min=1) * (gp / gs.clamp(min=1e-6) - coarse)
+        return coarse.repeat_interleave(S // K, 2).repeat_interleave(S // K, 3)
 
     @staticmethod
     def facts(obs):
@@ -111,21 +144,22 @@ class Policy(nn.Module):
                             1 - radar(6).amin(-1), 1 - radar(5).amin(-1), obs[..., 4], radar(7).amax(-1), obs[..., 3]), -1)
 
     def read(self, Mf, M, cell, team):
-        """What an agent sees on its team's map: the window x window sectors round it,
-        and the whole map pooled down to coarse x coarse."""
+        """What an agent sees on its team's map -- the window x window sectors round it
+        -- and both teams' maps pooled down to coarse x coarse (each agent reads only
+        its own team's; the critic gets both)."""
         B, A = cell.shape[:2]
-        S, C = self.cells, self.chan
+        S, C = self.cells, self.chan + self.orders
         win = (cell.unsqueeze(2) + self.offsets).clamp(0, S - 1)                  # (B, A, K*K, 2)
         idx = (team * S * S).view(1, A, 1) + win[..., 0] * S + win[..., 1]
         local = Mf.gather(1, idx.flatten(1).unsqueeze(-1).expand(-1, -1, C)).view(B, A, -1)
         pooled = F.max_pool2d(M.permute(0, 1, 4, 2, 3).reshape(B * 2, C, S, S), S // self.coarse)   # max, not mean: one report in an empty region survives
-        return torch.cat((local, pooled.reshape(B, 2, -1)[:, team]), -1)
+        return local, pooled.reshape(B, 2, -1)
 
     def update(self, Mf, cell, team, gate, value, using):
         """Gated write: every sector with agents in it moves toward their mean value by
         their mean gate; the rest fade a little."""
         B, A = cell.shape[:2]
-        S, C = self.cells, self.chan
+        S, C = self.cells, Mf.shape[-1]
         idx = ((team * S * S).view(1, A) + cell[..., 0] * S + cell[..., 1]).unsqueeze(-1)
         add = lambda x: torch.zeros(B, 2 * S * S, x.shape[-1], device=Mf.device).scatter_add(1, idx.expand_as(x), x)
         n, g, gv = add(using.float().unsqueeze(-1)), add(gate), add(gate * value)
@@ -212,7 +246,7 @@ def evaluate(policy, env):
 
 
 # ---- training ------------------------------------------------------------------
-GAMMA, LAM, CLIP, EPOCHS, MB_GAMES, LR = .99, .95, .2, 3, 32, 3e-4   # a minibatch is 32 games' whole rollouts
+GAMMA, LAM, CLIP, EPOCHS, MB_GAMES, LR = .99, .95, .2, 2, 64, 3e-4   # a minibatch is 64 games' whole rollouts
 
 
 class Runner:
@@ -346,8 +380,10 @@ def train(arenas, steps=32, minutes=None, output='tank_policy.pt', seed=1, logdi
     start, start_iter, agent_steps = time.monotonic(), it, 0
     while minutes is None or time.monotonic() - start < minutes * 60:
         it += 1
-        run = runs[it % len(runs)]                              # the arena sizes take turns
+        due = [r for r in runs if ARENAS[r.name]['start'] <= it]
+        run = due[it % len(due)]                                # the arenas in play take turns
         run.env.reset_stats()
+        run.env.team_spirit.fill_(min(1., it / SPIRIT_ITERS) * (SPIRIT_TO - SPIRIT_FROM) + SPIRIT_FROM)
         if it % 50 == 1:                                        # new past opponent: a random snapshot from the pool
             pool = (pool + [copy.deepcopy(policy.state_dict())])[-10:]
             past.load_state_dict(random.choice(pool))
@@ -362,6 +398,7 @@ def train(arenas, steps=32, minutes=None, output='tank_policy.pt', seed=1, logdi
         elapsed, agent_steps = time.monotonic() - start, agent_steps + steps * run.env.B * run.env.A
         log = {f'{run.name}/{k}': v for k, v in summarize(run.env, d, losses).items()}
         log['time/agent_steps_per_s'], log['time/minutes'] = agent_steps / elapsed, elapsed / 60
+        log['train/team_spirit'] = run.env.team_spirit.item()
         line = f"it {it} {elapsed / 60:.1f}min {run.name:6} " + ' '.join(f"{k}={log[f'{run.name}/{v}']:.2f}" for k, v in SHOWN.items())
         if it % 100 == 0:                                       # full games on the medium board, so this is slow-ish
             win, loss, mw, ml = evaluate(policy, eval_env)

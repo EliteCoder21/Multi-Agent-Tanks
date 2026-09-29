@@ -122,6 +122,33 @@ and a 512-unit GRU memory, trained with backpropagation through time, made a lar
 difference: the recurrent policy won half its games against the scripted raider
 after about 400 iterations, where the MLP had needed about 4 000.
 
+## Planning at the scale of the board
+
+The map gave units somewhere to *read* the state of the war, but nothing in the
+design let anyone *decide* for the team — every unit still chose its own action from
+its own corner of the map, and the value that trained those choices saw only that
+corner too. Two ideas from the literature (see `docs/SURVEY.md`) fixed both halves:
+
+- **A centralised critic** (MAPPO): the value head, which only training uses, now
+  sees both teams' maps pooled over the whole board, so a unit's action is judged
+  against what the rest of the war was doing.
+- **Commanders writing orders** (Feudal networks, made spatial): each base writes an
+  8 × 8 plan over the entire board into a separate orders layer of the team map,
+  and every unit reads the order for the sector it stands in. What an order means
+  is never specified; the bases' plans and the units' responses are trained
+  together by the same team reward.
+
+Team spirit is annealed from 0.3 to 0.7 rather than fixed, as OpenAI Five did:
+early on, individual reward is the faster teacher.
+
+## Speed, again
+
+With the map and the GRU, an iteration had grown to 15 s, 11 s of it the PPO update.
+Profiling showed the update evenly spread over hundreds of small kernels per turn —
+GPU-bound, not launch-bound — so bigger minibatches changed nothing; two epochs
+instead of three and a curriculum that starts on the small board alone (half the
+agents, fights learned soonest) roughly halved the time to a fighting policy.
+
 ## One arena is not enough
 
 Trained on one board, the policy learned that board: where the bases sit, how far

@@ -82,8 +82,9 @@ FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.2, -2.   # friendly fire is on: a hit cos
 # DEFEND_RADIUS of one of your bases is worth 3x
 BASE_LOST_W, BASE_WON_W, WIN_BONUS, TIMEOUT_BONUS, LOSS_SCALE = -4., 2., 3., 1.5, 2.
 DEFEND_RADIUS, DEFEND_W = 60., .4
-# team spirit: every reward is blended half-and-half with the team's average, so helping
-# the team pays as much as helping yourself -- the glue for board-wide plans
+# team spirit: every reward is blended with the team's average, so helping the team pays
+# even when someone else gets the credit -- the glue for board-wide plans. train.py
+# anneals it from .3 to .7 (Arena.team_spirit); this is the default for play
 TEAM_SPIRIT = .5
 ASSIST_W, ASSIST_WINDOW = 1., 20          # everyone who hit an enemy in its last 20 turns gets as much as the killer
 # comrades: a soldier or heavy pays up to AWAY_W a turn for drifting from the group --
@@ -220,6 +221,7 @@ class Arena:
         self.block_owner = torch.full((B, self.BG * self.BG + 1), -1, dtype=torch.int16, device=d)
         self.t = torch.zeros(B, dtype=torch.long, device=d)
         self.winner = torch.full((B,), -1, dtype=torch.long, device=d)
+        self.team_spirit = torch.tensor(TEAM_SPIRIT, device=d)   # a tensor, so training can change it without a recompile
         self.stats = {k: torch.zeros((), device=d) for k in (
             'shots', 'blind_shots', 'hits', 'friendly_hits', 'misses', 'kills', 'deaths', 'assists', 'base_kills', 'base_damage',
             'bases_lost', 'defend_hits', 'heals', 'rescues', 'pickups', 'deposits', 'builds', 'repairs', 'base_walls',
@@ -492,7 +494,7 @@ class Arena:
                   + BLOCK_PLACE_W * placed * pointless + BLOCK_WALL_W * walled + BLOCK_SAVE_W * saves + BLOCK_STOP_W * block_stops)
         live = alive0.view(B, 2, self.N)
         team_mean = (reward.view(B, 2, self.N) * live).sum(-1) / live.sum(-1).clamp(min=1)
-        reward = (1 - TEAM_SPIRIT) * reward + TEAM_SPIRIT * team_mean[:, self.team]
+        reward = (1 - self.team_spirit) * reward + self.team_spirit * team_mean[:, self.team]
 
         # outcome: a team with no bases left loses; at the limit, more bases (then tanks) wins
         self.t += 1
