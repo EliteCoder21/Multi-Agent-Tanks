@@ -30,6 +30,15 @@ friend. Tanks now start evenly spaced on a ring round their base.
 
 ## Rewards — the failure modes
 
+**A fresh policy pays for every penalty the moment it acts.** Before it can aim,
+moving risks bumping a teammate, shooting inside a group mostly hits friends, and
+straying from the group costs too — while an "idle" penalty hits everyone equally, so
+it never favours acting. With the overlap penalty at −0.25, friendly damage at −0.4
+and the squad penalties at −0.02, freshly trained tanks moved on 66 % of turns at
+first and 9 % a few hundred iterations later, and never learned to fight. Halving
+them fixed it: tanks kept moving on ~75 % of turns and were landing kills within
+80 iterations.
+
 **Dense penalties swamp everything.** Early per-turn penalties for clustering,
 hugging corners and bumping walls were bigger in total than the combat reward; tanks
 learned to avoid everything, including the enemy. Lesson: keep per-turn terms small

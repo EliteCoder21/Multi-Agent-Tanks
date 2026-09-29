@@ -152,8 +152,8 @@ self-play found something degenerate instead — [docs/HISTORY.md](docs/HISTORY.
 tells those stories. All the weights are named constants near the top of `arena.py`.
 
 **Individual credit.** +1 per kill, +0.2 per damage dealt, −0.03 per wasted shot,
-−1 for dying. Hitting a teammate costs twice what hitting an enemy earns (−0.4 per
-damage, −2 for a kill).
+−1 for dying. Hitting a teammate costs what hitting an enemy earns (−0.2 per
+damage), and killing one costs −2.
 
 **Team spirit.** Every agent's reward is blended 30 % with its team's average, so
 helping the team pays even when someone else lands the kill (the same trick OpenAI
@@ -167,13 +167,15 @@ Five used).
   to an enemy within 60 tiles of one of your bases is worth three times as much;
 - the game: +3 for winning outright, −6 for losing (±1.5 / −3 if decided on the clock).
 
-**Squads.** A soldier or heavy pays up to −0.02 a turn for drifting away from its
-comrades (nothing while its second-nearest ally is within 12 tiles), and the same
-again once it has gone 60 turns without hitting an enemy — so a group has to fight
+**Squads.** A soldier or heavy pays up to −0.01 a turn for drifting away from its
+comrades (nothing while its second-nearest ally is within 12 tiles, all of it 40
+tiles beyond), and the same again once it has gone 60 turns without hitting an enemy — so a group has to fight
 together, not just huddle. Every tank that hit an enemy in the 20 turns before it
 died gets +1, as much as the killer, so focusing fire pays. A comrade dying close by
 costs a little (−0.05, or −0.15 for a heavy). Only actually overlapping another tank
-is penalised (−0.25 a turn).
+is penalised (−0.1 a turn). These squad terms are deliberately mild: early in
+training, when nothing can aim yet, every one of them lands on *doing something*, and
+at twice these values fresh policies learned to stand still.
 
 **Barricades.** A scattered block costs −0.15; one that extends a wall of your team's
 blocks is free. The tank that placed a block earns +0.5 for every enemy bullet it

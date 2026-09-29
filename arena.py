@@ -67,7 +67,7 @@ REPAIR_SELF, REPAIR_NEAR, ORDER_CD = 10., 2., 5
 KILL_W, BASE_KILL_W, DAMAGE_W, MISS_W = 1., 3., .2, -.03
 BASE_DAMAGE_W = .1                        # extra per damage to an enemy base: sieges pay as they go
 DEATH_W, BASE_DEATH_W = -1., -8.
-FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.4, -2.   # friendly fire is on and costs more than enemy fire earns
+FRIENDLY_DAMAGE_W, FRIENDLY_KILL_W = -.2, -2.   # friendly fire is on: a hit costs what an enemy hit earns, a kill a lot more
 # bases: losing hurts more than winning pays (each living teammate -4 per base lost, +2
 # per enemy base taken; the game loss is twice the win), and damage to an enemy within
 # DEFEND_RADIUS of one of your bases is worth 3x
@@ -79,12 +79,14 @@ TEAM_SPIRIT = .3
 ASSIST_W, ASSIST_WINDOW = 1., 20          # everyone who hit an enemy in its last 20 turns gets as much as the killer
 # comrades: a soldier or heavy pays up to AWAY_W a turn for drifting from the group --
 # nothing while its second-nearest allied tank is within FORM_MAX, all of it by FORM_MAX +
-# AWAY_SCALE; a comrade dying close by stings (a heavy more); only actual overlap is penalised
-FORM_MAX, AWAY_SCALE, AWAY_W, STACK_W = 12., 20., -.02, -.25
+# AWAY_SCALE; a comrade dying close by stings (a heavy more); only actual overlap is penalised.
+# Keep all of these mild: early in training, when nothing can aim yet, every one of them
+# lands on *doing something*, and at twice these values fresh policies learned to freeze
+FORM_MAX, AWAY_SCALE, AWAY_W, STACK_W = 12., 40., -.01, -.1
 COMRADE_NEAR, COMRADE_DEATH_W, COMMANDER_DEATH_W = 25., -.05, -.15
 # ...and one that hasn't hit an enemy for IDLE_TURNS pays as much again, wherever it is
 # (as strong as AWAY_W, or groups just huddle; small next to death, so dying never pays)
-IDLE_TURNS, IDLE_W = 60, -.02
+IDLE_TURNS, IDLE_W = 60, -.01
 # economy (kept modest: shared through team spirit, big economy rewards taught whole
 # armies to farm safely at home instead of fighting)
 PICKUP_W, DEPOSIT_W, BUILD_W, WALL_W = .1, .4, .1, .1   # build: per heart spent; wall: per block raised
