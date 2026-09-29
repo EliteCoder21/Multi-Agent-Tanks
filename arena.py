@@ -32,7 +32,8 @@ os.environ.setdefault('TRITON_CACHE_DIR', os.path.expanduser('~/.cache/tank_aren
 
 GRID, LIMIT = 1125, 1500                  # full board (the viewer) and turn limit; training uses a smaller board
 TANKS, START, BASES = 40, (6, 18, 4), 5    # defaults per team: tank slots, scouts/soldiers/heavies at start, bases
-N_MAPS, N_RECTS, BASE_GAP, BASE_CLEAR = 8, 3440, 250, 15
+N_MAPS, N_RECTS, BASE_GAP, BASE_CLEAR = 16, 3440, 250, 15
+STYLES = ('rubble', 'boulders', 'corridors', 'open')   # map k is drawn in style k % 4
 
 ROLE_NAMES = ('scout', 'soldier', 'commander', 'base')
 SCOUT, SOLDIER, COMMANDER, BASE = range(4)
@@ -97,6 +98,7 @@ HEAL_W, RESCUE_W, RESCUE_FRAC = .5, .5, .35             # per hp healed; extra f
 BLOCK_PLACE_W, BLOCK_WALL_W, BLOCK_SAVE_W, BLOCK_STOP_W = -.15, .15, .5, .1
 
 OBS = 4 + 8 + 2 + 2 + 4 * VISION_SECTORS + 9 * RADAR_SECTORS
+POS = slice(12, 14)                       # where an agent's position (as a fraction of the board) sits in its observation
 FAR = 1e5
 _maps = {}
 
@@ -106,10 +108,13 @@ def wrap(a):
 
 
 def _map(k, grid=GRID, bases=BASES):
-    """Map k (deterministic) on a grid x grid board: scattered rectangles, 2 x bases
-    spread apart (BASE_GAP on the full board, scaled down with it) with open ground
-    round each, and every pocket not connected to the big open area walled off.
-    Returns (walls, base positions: first half team 0, second half team 1)."""
+    """Map k (deterministic) on a grid x grid board, in one of four styles: rubble
+    (lots of small rocks), boulders (fewer, bigger), corridors (long thin walls) or
+    open (sparse rocks). 2 x bases are spread apart (BASE_GAP on the full board,
+    scaled down with it) with open ground round each, and every pocket not connected
+    to the big open area is walled off. Returns (walls, base positions: first half
+    team 0, second half team 1)."""
+    style = STYLES[k % len(STYLES)]
     if (k, grid, bases) in _maps:
         return _maps[k, grid, bases]
     f = grid / GRID
@@ -125,7 +130,11 @@ def _map(k, grid=GRID, bases=BASES):
                 spots = []
         spots = np.array(spots)[rng.permutation(2 * bases)]
         walls = np.zeros((grid, grid), bool)
-        wh = rng.uniform(3, 10, (int(N_RECTS * f * f), 2))
+        count, lo, hi = {'rubble': (N_RECTS, 3, 10), 'boulders': (N_RECTS // 6, 8, 24),
+                         'corridors': (N_RECTS // 12, 2, 4), 'open': (N_RECTS // 4, 3, 10)}[style]
+        wh = rng.uniform(lo, hi, (int(count * f * f), 2))
+        if style == 'corridors':                                   # long one way, thin the other
+            wh[np.arange(len(wh)), rng.integers(2, size=len(wh))] = rng.uniform(30, 90, len(wh)) * f
         xy = rng.uniform(2, grid - 2 - wh)
         for (x, y), (w, h) in zip(xy.astype(int), (xy + wh).astype(int)):
             walls[x:w + 1, y:h + 1] = True
